@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, foolproof column mapping, and market matchup factors.")
+st.markdown("### Count-based scaling, 4 core prop markets, and robust team matchup factors.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -35,8 +35,7 @@ with tab1:
                 "Shots on Goal (SOG)", 
                 "Points (G+A)", 
                 "Anytime Goal Scorer", 
-                "Assists Only", 
-                "Power-Play Points (PPP)"
+                "Assists Only"
             ]
         )
 
@@ -46,10 +45,8 @@ with tab1:
         default_base, default_curr, default_line, default_odds = 1.68, 2.57, 1.5, +115
     elif market_type == "Anytime Goal Scorer":
         default_base, default_curr, default_line, default_odds = 0.58, 0.57, 0.5, +135
-    elif market_type == "Assists Only":
+    else:  # Assists Only
         default_base, default_curr, default_line, default_odds = 1.10, 1.71, 0.5, -110
-    else:  # Power-Play Points (PPP)
-        default_base, default_curr, default_line, default_odds = 0.75, 0.85, 0.5, +140
 
     with col2:
         baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
@@ -95,7 +92,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections include foolproof mapping and matchup factors.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections use clean 4-market column mapping.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -103,8 +100,7 @@ with tab2:
             "Shots on Goal (SOG)", 
             "Points (G+A)", 
             "Anytime Goal Scorer", 
-            "Assists Only", 
-            "Power-Play Points (PPP)"
+            "Assists Only"
         ],
         key="multi_batch_market"
     )
@@ -172,7 +168,7 @@ with tab2:
             team_opponents = {}
             
             try:
-                sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.schedule('%Y-%m-%d') if hasattr(target_date, 'schedule') else target_date.strftime('%Y-%m-%d')}"
+                sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
                 sched_resp = requests.get(sched_url).json()
                 
                 team_stat_dict = {}
@@ -183,8 +179,6 @@ with tab2:
                         candidates = ['CA', 'FA', 'SA']
                     elif batch_market in ["Anytime Goal Scorer"]:
                         candidates = ['HDCF', 'HDCA', 'CA']
-                    elif batch_market == "Power-Play Points (PPP)":
-                        candidates = ['GF', 'GA', 'CA']
                     else:
                         candidates = ['SCF', 'SCA', 'CA']
                         
@@ -218,44 +212,26 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule/Matchup fetch warning: {e}")
 
-            # Foolproof column map with automatic fallback matching
-            col_map = {
-                "Shots on Goal (SOG)": "Shots",
-                "Points (G+A)": "Total Points",
-                "Anytime Goal Scorer": "Goals",
-                "Assists Only": "Total Assists",
-                "Power-Play Points (PPP)": "Total Points"
-            }
-            
-            preferred_col = col_map.get(batch_market, "Total Points")
-            
-            # Find the best matching column in curr_player_df
-            if batch_market == "Power-Play Points (PPP)":
-                matches = [c for c in curr_player_df.columns if 'PP' in c or 'Power' in c or 'Total Points' in c]
-                target_col = matches[0] if matches else 'Total Points'
-            else:
-                target_col = preferred_col if preferred_col in curr_player_df.columns else 'Total Points'
+            # Precise market column targeting for 4 core markets
+            if batch_market == "Shots on Goal (SOG)":
+                target_col = 'Shots'
+            elif batch_market == "Points (G+A)":
+                target_col = 'Total Points'
+            elif batch_market == "Anytime Goal Scorer":
+                target_col = 'Goals'
+            else: # Assists Only
+                target_col = 'Total Assists'
 
-            # Ensure target_col exists in both curr and prev player files; fallback safely if missing
-            if target_col not in curr_player_df.columns:
-                target_col = curr_player_df.columns[1] # fallback to first numeric-like column
-            if target_col not in prev_player_df.columns:
-                prev_col = target_col if target_col in prev_player_df.columns else prev_player_df.columns[1]
-            else:
-                prev_col = target_col
+            prev_col = target_col
 
             merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
             merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
             
-            # Safely cast stats and games played to numeric
             merged_df['Stat_curr'] = pd.to_numeric(merged_df[f'{target_col}_curr'], errors='coerce').fillna(0)
             merged_df['Stat_prev'] = pd.to_numeric(merged_df[f'{prev_col}_prev'], errors='coerce').fillna(0)
             
-            gp_prev_col = 'GP_prev' if 'GP_prev' in merged_df.columns else merged_df.columns[0]
-            gp_curr_col = 'GP_curr' if 'GP_curr' in merged_df.columns else merged_df.columns[0]
-            
-            gp_prev = pd.to_numeric(merged_df.get(gp_prev_col, pd.Series([82]*len(merged_df))), errors='coerce').replace(0, 1).fillna(82)
-            gp_curr = pd.to_numeric(merged_df.get(gp_curr_col, pd.Series([5]*len(merged_df))), errors='coerce').replace(0, 1).fillna(5)
+            gp_prev = pd.to_numeric(merged_df.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
+            gp_curr = pd.to_numeric(merged_df.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
             
             merged_df = merged_df[gp_curr >= min_gp].copy()
             
@@ -284,7 +260,7 @@ with tab2:
             
             if batch_market == "Shots on Goal (SOG)":
                 high_thresh, low_thresh = 1.05, 0.95
-            elif batch_market in ["Anytime Goal Scorer", "Power-Play Points (PPP)"]:
+            elif batch_market == "Anytime Goal Scorer":
                 high_thresh, low_thresh = 1.07, 0.93
             else:
                 high_thresh, low_thresh = 1.03, 0.97
@@ -315,7 +291,7 @@ with tab3:
         leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists")
         leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5)
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 PPP")
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points")
         leg2_odds = st.number_input("Leg 2 American Odds", value=+130, step=5)
         
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
@@ -326,8 +302,8 @@ with tab3:
     
     boost_val = st.number_input("Apply Profit Boost to Parlay (%)", min_value=0, max_value=100, value=30, step=5)
     
-    profit_fraction = combined_parlay_dec - 1
-    boosted_parlay_dec = 1 + (profit_fraction * (1 + (boost_val / 100)))
+    profit_frac = combined_parlay_dec - 1
+    boosted_parlay_dec = 1 + (profit_frac * (1 + (boost_val / 100)))
     boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
     
     st.divider()
