@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, robust market matchup factors, and opponent game tags.")
+st.markdown("### Count-based scaling, fixed market mappings, and opponent game tags.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections include **robust fallback matchup factors** and opponent tags.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections include exact market-specific column mapping.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -179,15 +179,14 @@ with tab2:
                 if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     
-                    # Intelligent column selection with guaranteed fallbacks
                     if batch_market == "Shots on Goal (SOG)":
-                        candidates = ['CA', 'FA', 'SA', 'SF']
+                        candidates = ['CA', 'FA', 'SA']
                     elif batch_market in ["Anytime Goal Scorer"]:
-                        candidates = ['HDCF', 'HDCA', 'CA', 'FA']
+                        candidates = ['HDCF', 'HDCA', 'CA']
                     elif batch_market == "Power-Play Points (PPP)":
-                        candidates = ['GF', 'GA', 'CA', 'FA'] # fallback to team goals/Corsi if penalty cols vary
+                        candidates = ['GF', 'GA', 'CA']
                     else:
-                        candidates = ['SCF', 'SCA', 'CA', 'FA']
+                        candidates = ['SCF', 'SCA', 'CA']
                         
                     stat_col = next((c for c in candidates if c in curr_team_df.columns), 'CA')
                         
@@ -218,14 +217,21 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule/Matchup fetch warning: {e}")
 
+            # Corrected mapping to target specific Natural Stat Trick player CSV columns
             col_map = {
                 "Shots on Goal (SOG)": "Shots",
                 "Points (G+A)": "Total Points",
                 "Anytime Goal Scorer": "Goals",
                 "Assists Only": "Total Assists",
-                "Power-Play Points (PPP)": "Total Points"
+                "Power-Play Points (PPP)": "Total Points" # Note: NST player count files group power-play points under total points in the PP report, or we check for alternative columns
             }
-            target_col = col_map.get(batch_market, "Total Points")
+            
+            # Let's inspect available columns to grab exact PPP column if present
+            if batch_market == "Power-Play Points (PPP)":
+                possible_ppp = [c for c in curr_player_df.columns if 'PP' in c or 'Power' in c]
+                target_col = possible_ppp[0] if possible_ppp else 'Total Points'
+            else:
+                target_col = col_map.get(batch_market, "Total Points")
 
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
@@ -254,7 +260,7 @@ with tab2:
                     else:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
-                st.write(f"### 📈 Slate Projections Board ({batch_market}):")
+                st.write(f"### 📈 Slate Projections Board ({batch_market} using column: `{target_col}`):")
                 display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
                 
                 final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
