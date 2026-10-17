@@ -128,14 +128,12 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
-        # Filter out alt lines for main markets so we only evaluate standard primary lines
+        # Filter strictly for main lines if scanning standard markets
         if "alternate" not in api_market_choice:
             if api_market_choice == "player_shots_on_goal":
-                # Typical main SOG line is 2.5 or 1.5 depending on player, let's keep standard lines <= 3.5
-                master_df = master_df[master_df['Line'].isin([0.5, 1.5, 2.5, 3.5])]
+                master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
             elif api_market_choice in ["player_points", "player_assists", "player_goals"]:
-                # Typical main line for points/goals/assists is usually 0.5 (or 1.5 for elite point props)
-                master_df = master_df[master_df['Line'].isin([0.5, 1.5])]
+                master_df = master_df[master_df['Line'].isin([0.5])]
 
         # Merge with Tab 2 model data if available in session state
         if 'model_matrix_df' in st.session_state:
@@ -381,7 +379,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
