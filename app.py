@@ -139,10 +139,8 @@ with tab1:
         # AIRTIGHT MAIN LINE FILTERING
         if "alternate" not in api_market_choice:
             if "shots_on_goal" in api_market_choice:
-                # Keep standard SOG main lines (typically 1.5, 2.5, 3.5)
                 master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
             elif any(m in api_market_choice for m in ["points", "goals", "assists"]):
-                # Keep strictly 0.5 for standard player scoring props
                 master_df = master_df[master_df['Line'] == 0.5]
 
         # Merge with Tab 2 model data based on selected market category
@@ -442,7 +440,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
