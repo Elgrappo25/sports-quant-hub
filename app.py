@@ -5,8 +5,8 @@ from datetime import date
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
-st.title("🏒 NHL Quant Terminal: Native NST Batch Suite")
-st.markdown("### Multi-market evaluation, raw Natural Stat Trick multi-season file merging, and boost optimization.")
+st.title("🏒 NHL Quant Terminal: Production Suite")
+st.markdown("### Multi-market evaluation, multi-season NST data merging, team matchup context, and boost optimization.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -16,7 +16,7 @@ global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min
 # Navigation Tabs
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Smart Market Evaluator", 
-    "📁 Native NST Batch Uploader", 
+    "📁 Multi-File NST Uploader", 
     "🚀 Boost & Parlay Optimizer",
     "📅 Live NHL Schedule & Matchups"
 ])
@@ -93,8 +93,8 @@ with tab1:
         st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
 
 with tab2:
-    st.subheader("Natural Stat Trick Native File Processor")
-    st.write("Upload your raw NST player season total exports (Current Season & Previous Season) to merge and calculate edges automatically.")
+    st.subheader("Single Dropzone: Multi-File NST Processor")
+    st.write("Drop all your Natural Stat Trick CSV files (Player Season Totals & Team Games for current and previous seasons) into the box below simultaneously.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -105,48 +105,65 @@ with tab2:
             "Assists Only", 
             "Power-Play Points (PPP)"
         ],
-        key="native_batch_market"
+        key="multi_batch_market"
     )
     
-    col_file1, col_file2 = st.columns(2)
-    with col_file1:
-        curr_file = st.file_uploader("Upload Current Season NST CSV", type="csv", key="curr_nst")
-    with col_file2:
-        prev_file = st.file_uploader("Upload Previous Season NST CSV", type="csv", key="prev_nst")
+    uploaded_files = st.file_uploader(
+        "Drop all 4 Natural Stat Trick CSV files here", 
+        type="csv", 
+        accept_multiple_files=True,
+        key="multi_nst_drop"
+    )
+    
+    if uploaded_files:
+        st.write(f"📁 **Received {len(uploaded_files)} files. Processing...**")
         
-    if curr_file is not None and prev_file is not None:
-        df_curr = pd.read_csv(curr_file)
-        df_prev = pd.read_csv(prev_file)
+        curr_player_df, prev_player_df, curr_team_df, prev_team_df = None, None, None, None
         
-        # Map NST column based on market type
-        stat_map = {
-            "Shots on Goal (SOG)": "Shots/60",
-            "Points (G+A)": "Total Points/60",
-            "Anytime Goal Scorer": "Goals/60",
-            "Assists Only": "Total Assists/60",
-            "Power-Play Points (PPP)": "Goals/60" # Fallback or proxy if PPP column varies
-        }
-        target_col = stat_map.get(batch_market, "Shots/60")
+        for file in uploaded_files:
+            fname = file.name.lower()
+            if "player" in fname and "25-26" in fname:
+                curr_player_df = pd.read_csv(file)
+            elif "player" in fname:
+                prev_player_df = pd.read_csv(file)
+            elif "games" in fname and "25-26" in fname:
+                curr_team_df = pd.read_csv(file)
+            elif "games" in fname:
+                prev_team_df = pd.read_csv(file)
+                
+        # Status checks
+        col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+        col_s1.metric("Current Players", "Loaded" if curr_player_df is not None else "Missing")
+        col_s2.metric("Previous Players", "Loaded" if prev_player_df is not None else "Missing")
+        col_s3.metric("Current Teams", "Loaded" if curr_team_df is not None else "Missing")
+        col_s4.metric("Previous Teams", "Loaded" if prev_team_df is not None else "Missing")
         
-        if target_col in df_curr.columns and target_col in df_prev.columns:
-            # Merge current and previous on Player name
-            merged_df = pd.merge(df_curr, df_prev, on='Player', suffixes=('_curr', '_prev'), how='inner')
+        if curr_player_df is not None and prev_player_df is not None:
+            stat_map = {
+                "Shots on Goal (SOG)": "Shots/60",
+                "Points (G+A)": "Total Points/60",
+                "Anytime Goal Scorer": "Goals/60",
+                "Assists Only": "Total Assists/60",
+                "Power-Play Points (PPP)": "Goals/60"
+            }
+            target_col = stat_map.get(batch_market, "Shots/60")
             
-            # Estimate per-game baseline & current stat using TOI/GP if available, or rate / 20 as per-game proxy
-            merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] * (merged_df.get('TOI/GP_prev', 15) / 60)
-            merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] * (merged_df.get('TOI/GP_curr', 15) / 60)
-            
-            merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
-            
-            st.success(f"Successfully merged {len(merged_df)} players across seasons using metric: **{target_col}**!")
-            st.write("### 📈 Processed Multi-Season Player Projections:")
-            display_cols = ['Player', 'Team_curr', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
-            st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).head(25))
+            if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
+                merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+                merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] * (merged_df.get('TOI/GP_prev', 15) / 60)
+                merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] * (merged_df.get('TOI/GP_curr', 15) / 60)
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+                
+                st.success(f"Successfully merged {len(merged_df)} players across seasons for **{batch_market}**!")
+                st.write("### 📈 Top Projections Board:")
+                display_cols = ['Player', 'Team_curr', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
+                st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).head(25))
+            else:
+                st.error(f"Could not find column '{target_col}' in player files.")
         else:
-        # Fallback if specific column name isn't found
-            st.error(f"Could not find exact column '{target_col}' in uploaded files. Please ensure valid NST season total exports.")
+            st.warning("Please ensure you include both your Current Season and Previous Season Player Season Total CSV files in your upload.")
     else:
-        st.info("💡 **Instructions:** Upload both your Current Season and Previous Season Natural Stat Trick CSV files above to automatically merge baselines and compute multi-season player projections.")
+        st.info("💡 **Instructions:** Drag and drop all 4 of your Natural Stat Trick files at once into the dropzone above.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
