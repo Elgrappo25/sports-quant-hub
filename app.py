@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based per-game scaling, market-adaptive matchup thresholds, and high-pop text styling.")
+st.markdown("### Count-based scaling, market-tailored defensive matchup factors, and high-pop text styling.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections include market-adaptive thresholds and high-pop text styling.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections use **market-tailored matchup factors** (SOG vs Goals vs PPP).")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -173,16 +173,27 @@ with tab2:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
                 sched_resp = requests.get(sched_url).json()
                 
-                team_ga_dict = {}
-                if curr_team_df is not None and 'Team' in curr_team_df.columns and 'CA' in curr_team_df.columns:
+                team_stat_dict = {}
+                if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
-                    mean_ca = curr_team_df['CA'].mean()
+                    
+                    # Select specific defensive column based on active market type
+                    if batch_market == "Shots on Goal (SOG)":
+                        stat_col = 'CA' if 'CA' in curr_team_df.columns else 'FA'
+                    elif batch_market in ["Anytime Goal Scorer"]:
+                        stat_col = 'HDCF' if 'HDCF' in curr_team_df.columns else 'CA' # High danger or fallback
+                    elif batch_market == "Power-Play Points (PPP)":
+                        stat_col = 'Minor' if 'Minor' in curr_team_df.columns else 'Total Penalties'
+                    else: # Points & Assists
+                        stat_col = 'SCF' if 'SCF' in curr_team_df.columns else 'CA'
+                        
+                    mean_val = curr_team_df[stat_col].mean() if stat_col in curr_team_df.columns else 1.0
                     for _, row in curr_team_df.iterrows():
                         t_abbrev = row['Standard_Abbrev']
-                        ca_val = row.get('CA', mean_ca)
-                        factor = ca_val / mean_ca if mean_ca > 0 else 1.0
+                        val = row.get(stat_col, mean_val)
+                        factor = val / mean_val if mean_val > 0 else 1.0
                         if pd.notnull(t_abbrev):
-                            team_ga_dict[t_abbrev] = max(0.80, min(1.20, factor))
+                            team_stat_dict[t_abbrev] = max(0.80, min(1.20, factor))
 
                 for week_day in sched_resp.get("gameWeek", []):
                     if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
@@ -193,8 +204,8 @@ with tab2:
                             if home_abbrev: active_teams.add(home_abbrev)
                             
                             if away_abbrev and home_abbrev:
-                                away_factor = team_ga_dict.get(home_abbrev, 1.0)
-                                home_factor = team_ga_dict.get(away_abbrev, 1.0)
+                                away_factor = team_stat_dict.get(home_abbrev, 1.0)
+                                home_factor = team_stat_dict.get(away_abbrev, 1.0)
                                 team_matchup_factors[away_abbrev] = away_factor
                                 team_matchup_factors[home_abbrev] = home_factor
             except Exception as e:
@@ -231,7 +242,7 @@ with tab2:
                     filtered_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
                     if len(filtered_df) > 0:
                         merged_df = filtered_df
-                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
+                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date} using **{batch_market} tailored matchup metrics**.")
                     else:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
@@ -240,20 +251,19 @@ with tab2:
                 
                 final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
                 
-                # Market-adaptive thresholds for high-pop text styling (no background boxes)
                 if batch_market == "Shots on Goal (SOG)":
                     high_thresh, low_thresh = 1.05, 0.95
-                elif batch_market in ["Goals/60", "Anytime Goal Scorer", "Power-Play Points (PPP)"]:
+                elif batch_market in ["Anytime Goal Scorer", "Power-Play Points (PPP)"]:
                     high_thresh, low_thresh = 1.07, 0.93
-                else: # Points & Assists
+                else:
                     high_thresh, low_thresh = 1.03, 0.97
 
                 def high_pop_text(val):
                     if val > high_thresh:
-                        return 'color: #00E676; font-weight: bold; font-size: 1.05em;' # Vibrant neon green
+                        return 'color: #00E676; font-weight: bold; font-size: 1.05em;'
                     elif val < low_thresh:
-                        return 'color: #FF5252; font-weight: bold; font-size: 1.05em;' # Vibrant neon red
-                    return 'color: #CFD8DC;' # Crisp soft slate text
+                        return 'color: #FF5252; font-weight: bold; font-size: 1.05em;'
+                    return 'color: #CFD8DC;'
 
                 st.dataframe(
                     final_board.style.map(high_pop_text, subset=['Matchup_Factor', 'Matchup_Proj']),
