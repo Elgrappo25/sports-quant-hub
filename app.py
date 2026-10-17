@@ -90,20 +90,37 @@ with tab1:
 
 with tab2:
     st.subheader("Natural Stat Trick Batch Data Sheet Processor")
-    st.write("Upload your exported NST CSV data sheet to instantly compute edges across all players.")
-    st.info("💡 **Expected CSV Columns:** `Player`, `Baseline_Stat`, `Current_Stat`, `Line`, `Odds`")
+    st.write("Select the target market for your batch sheet, then upload your CSV to compute edges.")
+    
+    # Batch market selector dropdown so you always know what market the sheet is for!
+    batch_market = st.selectbox(
+        "Select Market Type for This Batch Sheet", 
+        [
+            "Shots on Goal (SOG)", 
+            "Points (G+A)", 
+            "Anytime Goal Scorer", 
+            "Assists Only", 
+            "Power-Play Points (PPP)"
+        ],
+        key="batch_market_select"
+    )
+    
+    st.info(f"💡 **Active Batch Market:** Evaluating **{batch_market}**. Expected CSV Columns: `Player`, `Baseline_Stat`, `Current_Stat`, `Line`, `Odds`")
     
     uploaded_file = st.file_uploader("Choose a Natural Stat Trick CSV Export", type="csv")
     
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
-        st.write("### 📋 Raw Uploaded Data Preview:")
+        st.write(f"### 📋 Raw Uploaded Data Preview ({batch_market}):")
         st.dataframe(df.head(10))
         try:
+            df['Market'] = batch_market
             df['Blended_Proj'] = (df['Baseline_Stat'] * (1 - (season_weight / 100))) + (df['Current_Stat'] * (season_weight / 100))
             df['Edge'] = df['Blended_Proj'] - df['Line']
-            st.write("### 📈 Processed Model Edges (Sorted High to Low):")
-            st.dataframe(df.sort_values(by='Edge', ascending=False))
+            st.write(f"### 📈 Processed Model Edges for {batch_market} (Sorted High to Low):")
+            # Reorder columns to show Market clearly
+            cols_to_show = ['Player', 'Market', 'Baseline_Stat', 'Current_Stat', 'Line', 'Odds', 'Blended_Proj', 'Edge']
+            st.dataframe(df[cols_to_show].sort_values(by='Edge', ascending=False))
         except Exception as e:
             st.error(f"Error processing columns. Please ensure your CSV headers include: Player, Baseline_Stat, Current_Stat, Line, Odds. Details: {e}")
     else:
@@ -116,7 +133,7 @@ with tab2:
             'Odds': [-110, +130, -105, +170]
         })
         st.dataframe(example_data)
-        st.markdown("*Tip: You can format any NST export to match these 5 column headers to instantly evaluate a full night's slate.*")
+        st.markdown(f"*Tip: Your current batch sheet will be evaluated under the market: **{batch_market}**.*")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
