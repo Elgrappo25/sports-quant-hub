@@ -10,7 +10,7 @@ st.markdown("### Multi-market custom algorithmic pricing, schedule-filtered slat
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
-season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
+season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 # Navigation Tabs
@@ -94,7 +94,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick files below. Each market uses custom algorithmic scaling (Rate-volume for SOG, production-blended regression for scoring).")
+    st.write("Drop your 4 Natural Stat Trick files below. Each market uses custom algorithmic scaling.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -146,8 +146,6 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule fetch warning: {e}")
 
-            # TAILORED MARKET STRATEGY MAPPING
-            # SOG uses pure rate-volume. Scoring markets use production normalization with regression buffers.
             if batch_market == "Shots on Goal (SOG)":
                 target_col = "Shots/60"
                 is_rate_volume = True
@@ -160,8 +158,8 @@ with tab2:
             elif batch_market == "Assists Only":
                 target_col = "Total Assists/60"
                 is_rate_volume = False
-            else:  # Power-Play Points (PPP)
-                target_col = "Goals/60"  # Proxy/fallback metric if specific PPP rate varies
+            else:
+                target_col = "Goals/60"
                 is_rate_volume = False
 
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
@@ -173,24 +171,14 @@ with tab2:
                 toi_prev_safe = toi_prev.apply(lambda x: x if pd.notnull(x) and x > 5 else 18.0)
                 toi_curr_safe = toi_curr.apply(lambda x: x if pd.notnull(x) and x > 5 else 18.0)
                 
-                # Baseline calculation (Historical rate scaled by ice time)
                 merged_df['Baseline_Stat'] = (merged_df[f'{target_col}_prev'] / 60.0) * toi_prev_safe
-                raw_curr_stat = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr_safe
+                merged_df['Current_Stat'] = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr_safe
                 
-                # Apply market-specific algorithmic adjustments
-                if is_rate_volume:
-                    # SOG: Pure volume scaling (shots scale linearly with ice time)
-                    pass
-                else:
-                    # Scoring markets: Apply regression dampening for early-season small sample variance
-                    raw_curr_stat = pd.Series([
-                        min(val, 1.85) if pd.notnull(val) else 0.5 for val in raw_curr_stat
-                    ])
-                    merged_df['Baseline_Stat'] = pd.Series([
-                        min(val, 1.75) if pd.notnull(val) else 0.5 for val in merged_df['Baseline_Stat']
-                    ])
+                if not is_rate_volume:
+                    merged_df['Current_Stat'] = merged_df['Current_Stat'].apply(lambda x: min(x, 1.85) if pd.notnull(x) else 0.5)
+                    merged_df['Baseline_Stat'] = merged_df['Baseline_Stat'].apply(lambda x: min(x, 1.75) if pd.notnull(x) else 0.5)
 
-                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (raw_curr_stat * (season_weight / 100))
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
                 team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else 'Team'
                 
@@ -215,7 +203,7 @@ with tab2:
         else:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drag and drop all 4 files above to generate slate projections.")
+        st.info("💡 **Instructions:** Drop all 4 files above to generate slate projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
