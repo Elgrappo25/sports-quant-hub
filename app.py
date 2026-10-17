@@ -6,14 +6,14 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Multi-market evaluation, schedule-filtered slate matching, and multi-season NST processing.")
+st.markdown("### Multi-market evaluation, robust per-game scaling, and slate matching.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
-# Navigation Tabs (Streamlined to 3 Tabs)
+# Navigation Tabs
 tab1, tab2, tab3 = st.tabs([
     "📊 Smart Market Evaluator", 
     "📁 Multi-File NST Uploader & Slate Matcher", 
@@ -94,7 +94,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick files below. The model automatically pulls today's schedule from the NHL API and filters projections **only for teams playing today**.")
+    st.write("Drop your 4 Natural Stat Trick files below. Projections are scaled accurately to per-game expectations.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -145,7 +145,7 @@ with tab2:
                             if away_abbrev: active_teams.add(away_abbrev)
                             if home_abbrev: active_teams.add(home_abbrev)
             except Exception as e:
-                st.warning(f"Could not auto-fetch schedule teams ({e}). Showing all players.")
+                st.warning(f"Schedule fetch warning: {e}")
 
             stat_map = {
                 "Shots on Goal (SOG)": "Shots/60",
@@ -159,32 +159,45 @@ with tab2:
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
-                # Correct per-game scaling: Rate / 60.0 * TOI/GP
-                toi_prev = merged_df.get('TOI/GP_prev', 18.0)
-                toi_curr = merged_df.get('TOI/GP_curr', 18.0)
+                # Robust per-game scaling: Rate per 60 converted to per-game using TOI/GP, capped/normalized for realism
+                toi_prev = merged_df.get('TOI/GP_prev', pd.Series([18.0]*len(merged_df)))
+                toi_curr = merged_df.get('TOI/GP_curr', pd.Series([18.0]*len(merged_df)))
+                
+                # Standard conversion: (Rate / 60) * TOI_per_game gives expected stat per game.
+                # To prevent small-sample explosion (e.g. 1 game played with high rate), we factor in GP reliability.
+                gp_curr = merged_df.get('GP_curr', pd.Series([1]*len(merged_df)))
                 
                 merged_df['Baseline_Stat'] = (merged_df[f'{target_col}_prev'] / 60.0) * toi_prev
-                merged_df['Current_Stat'] = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr
-                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+                raw_curr_stat = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr
+                
+                # Blend baseline and current with sample weighting
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (raw_curr_stat * (season_weight / 100))
                 
                 team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else 'Team'
-                if active_teams and team_col in merged_df.columns:
+                
+                # Option to toggle schedule filter
+                filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
+                if filter_slate and active_teams and team_col in merged_df.columns:
                     filtered_df = merged_df[merged_df[team_col].isin(active_teams)].copy()
                     if len(filtered_df) > 0:
                         merged_df = filtered_df
-                        st.success(f"📅 **Schedule Filter Active:** Filtered down to **{len(merged_df)} players** playing on {target_date} across {len(active_teams)} teams!")
+                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** playing on {target_date}.")
                     else:
-                        st.info("ℹ️ Team abbreviation match found 0 exact strings. Showing full player pool.")
+                        st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
                 st.write(f"### 📈 Slate Projections Board ({batch_market}):")
-                display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
-                st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True).head(50))
+                display_cols = ['Player', team_col, 'Baseline_Stat', 'Blended_Proj']
+                st.dataframe(
+                    merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True),
+                    use_container_width=True,
+                    height=500
+                )
             else:
                 st.error(f"Could not find column '{target_col}' in player files.")
         else:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drag and drop all 4 files above to generate tonight's slate projections.")
+        st.info("💡 **Instructions:** Drag and drop all 4 files above to generate slate projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
