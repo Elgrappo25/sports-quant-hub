@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based per-game scaling, opponent matchup adjustments, and conditional color-coding.")
+st.markdown("### Count-based per-game scaling, robust opponent matchup adjustments, and conditional color-coding.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections include opponent matchup factors and color coding.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections include robust opponent matchup factors and color coding.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -137,6 +137,39 @@ with tab2:
                     prev_team_df = temp_df
                 
         if curr_player_df is not None and prev_player_df is not None:
+            # Team abbreviation normalization dictionaries
+            nst_to_standard = {
+                'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ',
+                'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET',
+                'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL',
+                'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT',
+                'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL',
+                'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK',
+                'WPG': 'WPG', 'WSH': 'WSH'
+            }
+            full_to_standard = {
+                'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF',
+                'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY',
+                'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL',
+                'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA',
+                'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL',
+                'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI',
+                'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI',
+                'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
+                'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
+                'Utah Mammoth': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK',
+                'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
+            }
+
+            def clean_team(team_str):
+                if pd.isna(team_str):
+                    return 'UNK'
+                parts = [p.strip() for p in str(team_str).split(',')]
+                t = parts[-1]
+                return nst_to_standard.get(t, t)
+
+            curr_player_df['Clean_Team'] = curr_player_df['Team'].apply(clean_team)
+
             active_teams = set()
             team_matchup_factors = {}
             try:
@@ -145,12 +178,14 @@ with tab2:
                 
                 team_ga_dict = {}
                 if curr_team_df is not None and 'Team' in curr_team_df.columns and 'CA' in curr_team_df.columns:
+                    curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     mean_ca = curr_team_df['CA'].mean()
                     for _, row in curr_team_df.iterrows():
-                        t_abbrev = row['Team']
+                        t_abbrev = row['Standard_Abbrev']
                         ca_val = row.get('CA', mean_ca)
                         factor = ca_val / mean_ca if mean_ca > 0 else 1.0
-                        team_ga_dict[t_abbrev] = max(0.85, min(1.15, factor))
+                        if pd.notnull(t_abbrev):
+                            team_ga_dict[t_abbrev] = max(0.85, min(1.15, factor))
 
                 for week_day in sched_resp.get("gameWeek", []):
                     if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
@@ -179,6 +214,7 @@ with tab2:
 
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+                merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
                 
                 gp_prev = merged_df.get('GP_prev', pd.Series([82]*len(merged_df))).replace(0, 1)
                 gp_curr = merged_df.get('GP_curr', pd.Series([5]*len(merged_df))).replace(0, 1)
@@ -190,14 +226,12 @@ with tab2:
                 
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else ('Team' if 'Team' in merged_df.columns else 'Team_prev')
-                
-                merged_df['Matchup_Factor'] = merged_df[team_col].map(team_matchup_factors).fillna(1.0)
+                merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
                 
                 filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
-                if filter_slate and active_teams and team_col in merged_df.columns:
-                    filtered_df = merged_df[merged_df[team_col].isin(active_teams)].copy()
+                if filter_slate and active_teams and 'Clean_Team' in merged_df.columns:
+                    filtered_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
                     if len(filtered_df) > 0:
                         merged_df = filtered_df
                         st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
@@ -205,7 +239,7 @@ with tab2:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
                 st.write(f"### 📈 Slate Projections Board ({batch_market}):")
-                display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
+                display_cols = ['Player', 'Clean_Team', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
                 
                 final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
                 
@@ -216,7 +250,6 @@ with tab2:
                         return 'background-color: rgba(198, 40, 40, 0.25)'
                     return ''
 
-                # Use .map() for compatibility across pandas versions
                 st.dataframe(
                     final_board.style.map(color_matchup, subset=['Matchup_Proj']),
                     use_container_width=True,
