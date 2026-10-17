@@ -3,8 +3,8 @@ import pandas as pd
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Suite", page_icon="🏒", layout="wide")
 
-st.title("🏒 NHL Quant Terminal: Smart Market Evaluator")
-st.markdown("### Dynamic market evaluation with automatic baseline adjustments and boost optimization.")
+st.title("🏒 NHL Quant Terminal: Pro Market Suite")
+st.markdown("### Multi-market evaluation including SOG, Goals, Points, Assists, Power-Play Points, and Boost Optimization.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -20,10 +20,16 @@ with tab1:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        player_name = st.text_input("Player Name", value="Auston Matthews")
+        player_name = st.text_input("Player Name", value="Connor McDavid")
         market_type = st.selectbox(
             "Market Type", 
-            ["Shots on Goal (SOG)", "Points (G+A)", "Anytime Goal Scorer"]
+            [
+                "Shots on Goal (SOG)", 
+                "Points (G+A)", 
+                "Anytime Goal Scorer", 
+                "Assists Only", 
+                "Power-Play Points (PPP)"
+            ]
         )
 
     # Automatically set smart defaults based on selected market type
@@ -37,11 +43,21 @@ with tab1:
         default_curr = 1.30
         default_line = 1.5
         default_odds = +115
-    else:  # Anytime Goal Scorer
+    elif market_type == "Anytime Goal Scorer":
         default_base = 0.65
         default_curr = 0.75
         default_line = 0.5
         default_odds = +135
+    elif market_type == "Assists Only":
+        default_base = 0.80
+        default_curr = 0.90
+        default_line = 0.5
+        default_odds = -110
+    else:  # Power-Play Points (PPP)
+        default_base = 0.45
+        default_curr = 0.55
+        default_line = 0.5
+        default_odds = +140
 
     with col2:
         baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
@@ -82,9 +98,9 @@ with tab1:
     edge_spread = blended_projection - sportsbook_line
     col_c.metric(label="Line Diff vs Projection", value=f"{edge_spread:+.2f}")
 
-    if edge_spread > 0.25:
+    if edge_spread > 0.20:
         st.success(f"✅ **Strong Over / Alt Play:** {player_name} projects for {blended_projection:.2f} in **{market_type}** against the {sportsbook_line} line.")
-    elif edge_spread < -0.25:
+    elif edge_spread < -0.20:
         st.warning(f"⚠️ **Under / Pass:** Projection ({blended_projection:.2f}) does not clear safety margin.")
     else:
         st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
@@ -110,11 +126,11 @@ with tab2:
     else:
         st.write("### 🔎 Example CSV Format Preview:")
         example_data = pd.DataFrame({
-            'Player': ['Auston Matthews', 'Connor McDavid', 'Nathan MacKinnon', 'David Pastrnak'],
-            'Baseline_Stat': [3.85, 1.15, 0.65, 3.90],
-            'Current_Stat': [4.20, 1.30, 0.75, 4.10],
-            'Line': [4.5, 1.5, 0.5, 4.5],
-            'Odds': [+135, +115, +135, +140]
+            'Player': ['Connor McDavid', 'Cale Makar', 'Leon Draisaitl', 'Auston Matthews'],
+            'Baseline_Stat': [0.90, 0.50, 0.85, 0.65],
+            'Current_Stat': [1.05, 0.60, 0.95, 0.75],
+            'Line': [0.5, 0.5, 0.5, 1.5],
+            'Odds': [-110, +130, -105, +170]
         })
         st.dataframe(example_data)
 
@@ -124,11 +140,11 @@ with tab3:
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        leg1_name = st.text_input("Leg 1 Player / Prop", value="Matthews Over 3.5 SOG")
-        leg1_odds = st.number_input("Leg 1 American Odds", value=-120, step=5)
+        leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists")
+        leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5)
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="McDavid Over 1.5 Points")
-        leg2_odds = st.number_input("Leg 2 American Odds", value=+100, step=5)
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 PPP")
+        leg2_odds = st.number_input("Leg 2 American Odds", value=+130, step=5)
         
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
     dec2 = 1 + (leg2_odds / 100) if leg2_odds > 0 else 1 + (100 / abs(leg2_odds))
