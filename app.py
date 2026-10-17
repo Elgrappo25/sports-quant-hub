@@ -104,8 +104,6 @@ with tab1:
                             game_data = resp.json()
                             for bookmaker in game_data.get('bookmakers', []):
                                 b_title = bookmaker['title']
-                                for market in game_data.get('markets', []): # fix for market extraction
-                                    pass
                                 for market in bookmaker.get('markets', []):
                                     for outcome in market.get('outcomes', []):
                                         if outcome.get('name') == 'Over':
@@ -130,13 +128,20 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
+        # Filter out alt lines for main markets so we only evaluate standard primary lines
+        if "alternate" not in api_market_choice:
+            if api_market_choice == "player_shots_on_goal":
+                # Typical main SOG line is 2.5 or 1.5 depending on player, let's keep standard lines <= 3.5
+                master_df = master_df[master_df['Line'].isin([0.5, 1.5, 2.5, 3.5])]
+            elif api_market_choice in ["player_points", "player_assists", "player_goals"]:
+                # Typical main line for points/goals/assists is usually 0.5 (or 1.5 for elite point props)
+                master_df = master_df[master_df['Line'].isin([0.5, 1.5])]
+
         # Merge with Tab 2 model data if available in session state
         if 'model_matrix_df' in st.session_state:
             model_df = st.session_state['model_matrix_df']
-            # Merge on player name
             merged_scan = pd.merge(master_df, model_df[['Player', 'Matchup_Proj']], on='Player', how='inner')
             
-            # Calculate Poisson over probability for the specific book line
             def calc_row_prob(row):
                 return poisson_over_prob(row['Matchup_Proj'], row['Line'])
                 
@@ -144,7 +149,6 @@ with tab1:
             merged_scan['Model_Over_%'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
             merged_scan['Fair_Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
             
-            # Calculate Implied Book Probability & Edge %
             def calc_edge(row):
                 dec = row['Decimal Odds']
                 if dec <= 1.0: return 0.0
@@ -152,11 +156,9 @@ with tab1:
                 return round((row['Model_Over_Prob'] - implied) * 100, 1)
                 
             merged_scan['Edge_%'] = merged_scan.apply(calc_edge, axis=1)
-            
-            # Sort highest +EV to the top
             merged_scan = merged_scan.sort_values(by='Edge_%', ascending=False).reset_index(drop=True)
             
-            st.write("### 🎯 Slate +EV Market Comparison Board (Sorted by Highest Edge):")
+            st.write("### 🎯 Slate +EV Market Comparison Board (Filtered & Sorted by Edge):")
             
             def color_edge(val):
                 if val > 3.0:
@@ -379,7 +381,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
