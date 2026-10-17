@@ -21,6 +21,11 @@ st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping,
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
 min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
+
+st.sidebar.divider()
+st.sidebar.header("🎯 Edge & Value Filters")
+min_edge_filter = st.sidebar.slider("Min Edge Filter (%)", min_value=0.0, max_value=30.0, value=3.0, step=0.5)
+max_edge_filter = st.sidebar.slider("Max Edge Filter (%)", min_value=5.0, max_value=70.0, value=25.0, step=1.0)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 st.sidebar.divider()
@@ -71,7 +76,7 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
     st.subheader("Automated +EV Slate Scanner & Line-Shopper")
-    st.write("Scans live book props across standard & alternate endpoints to capture FanDuel & all books, matching them against your Tab 2 model projections.")
+    st.write("Scans live book props across standard & alternate endpoints, filtering out model glitches and matching against your Tab 2 model projections.")
     
     col_m1, col_m2 = st.columns([2, 1])
     api_market_choice = col_m1.selectbox(
@@ -98,8 +103,6 @@ with tab1:
                 if events_resp.status_code == 200:
                     events_list = events_resp.json()
                     books_str = ",".join(selected_books)
-                    
-                    # Automatically query BOTH standard and alternate endpoints to capture FanDuel and all books seamlessly
                     markets_to_query = f"{api_market_choice},{api_market_choice}_alternate"
                     
                     progress_bar = st.progress(0)
@@ -137,7 +140,7 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
-        # AIRTIGHT MAIN LINE FILTERING (Ensures clean lines regardless of endpoint source)
+        # AIRTIGHT MAIN LINE FILTERING
         if "shots_on_goal" in api_market_choice:
             master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
         elif any(m in api_market_choice for m in ["points", "goals", "assists"]):
@@ -165,6 +168,8 @@ with tab1:
             gp_prev = pd.to_numeric(merged_model.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
             gp_curr = pd.to_numeric(merged_model.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
             
+            merged_model = merged_model[gp_curr >= min_gp].copy()
+            
             merged_model['Baseline_Stat'] = merged_model['Stat_prev'] / gp_prev
             merged_model['Current_Stat'] = merged_model['Stat_curr'] / gp_curr
             
@@ -188,6 +193,9 @@ with tab1:
             merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
             merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
 
+            # Filter out zero projection glitches
+            merged_model = merged_model[merged_model['Matchup_Proj'] > 0.1].copy()
+
             merged_scan = pd.merge(master_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
             
             if len(merged_scan) == 0:
@@ -207,26 +215,36 @@ with tab1:
                     return round((row['Model_Over_Prob'] - implied) * 100, 1)
                     
                 merged_scan['Edge (%)'] = merged_scan.apply(calc_edge, axis=1)
+                
+                # Apply sidebar edge range filters
+                merged_scan = merged_scan[(merged_scan['Edge (%)'] >= min_edge_filter) & (merged_scan['Edge (%)'] <= max_edge_filter)]
                 merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
                 
-                pos_ev_count = len(merged_scan[merged_scan['Edge (%)'] > 3.0])
+                # Summary Metrics Bar
+                pos_ev_count = len(merged_scan)
                 top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Total Scanned Props", len(merged_scan))
-                m2.metric("Strong +EV Opportunities", pos_ev_count)
-                m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
+                m1.metric("Total Filtered Props", len(merged_scan))
+                m2.metric("Props in Target Sweet Spot", pos_ev_count)
+                m3.metric("Max Edge in Range", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
                 
                 st.divider()
+                
+                # INTERACTIVE PLAYER SEARCH BAR
+                search_query = st.text_input("🔍 Search Player Name", placeholder="Type player name (e.g., McDavid, Martone)...").strip()
+                if search_query:
+                    merged_scan = merged_scan[merged_scan['Player'].str.contains(search_query, case=False, na=False)]
+                
                 st.write("### 🎯 Slate +EV Market Comparison Board:")
                 
                 display_scan = merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
                 display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
                 
                 def color_edge(val):
-                    if val > 3.0:
+                    if val >= 5.0:
                         return 'color: #00E676; font-weight: bold;'
-                    elif val < -3.0:
+                    elif val < 0.0:
                         return 'color: #FF5252;'
                     return 'color: #CFD8DC;'
                     
@@ -440,7 +458,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
