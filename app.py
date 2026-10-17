@@ -137,24 +137,19 @@ with tab2:
                     prev_team_df = temp_df
                 
         if curr_player_df is not None and prev_player_df is not None:
-            # Fetch NHL schedule and opposing team context
             active_teams = set()
-            team_matchup_factors = {} # maps team abbrev to defensive multiplier
+            team_matchup_factors = {}
             try:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
                 sched_resp = requests.get(sched_url).json()
                 
-                # Build simple team goals-against lookup from team files if available
                 team_ga_dict = {}
                 if curr_team_df is not None and 'Team' in curr_team_df.columns and 'CA' in curr_team_df.columns:
-                    # Higher CA (Corsi Against) or lower suppression = weaker defense
                     mean_ca = curr_team_df['CA'].mean()
                     for _, row in curr_team_df.iterrows():
                         t_abbrev = row['Team']
                         ca_val = row.get('CA', mean_ca)
-                        # Multiplier relative to league average
                         factor = ca_val / mean_ca if mean_ca > 0 else 1.0
-                        # Clamp factor between 0.85 and 1.15 for realistic variance
                         team_ga_dict[t_abbrev] = max(0.85, min(1.15, factor))
 
                 for week_day in sched_resp.get("gameWeek", []):
@@ -165,10 +160,9 @@ with tab2:
                             if away_abbrev: active_teams.add(away_abbrev)
                             if home_abbrev: active_teams.add(home_abbrev)
                             
-                            # Assign opponent factor
                             if away_abbrev and home_abbrev:
-                                away_factor = team_ga_dict.get(home_abbrev, 1.0) # away team plays home team's defense
-                                home_factor = team_ga_dict.get(away_abbrev, 1.0) # home team plays away team's defense
+                                away_factor = team_ga_dict.get(home_abbrev, 1.0)
+                                home_factor = team_ga_dict.get(away_abbrev, 1.0)
                                 team_matchup_factors[away_abbrev] = away_factor
                                 team_matchup_factors[home_abbrev] = home_factor
             except Exception as e:
@@ -198,7 +192,6 @@ with tab2:
                 
                 team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else ('Team' if 'Team' in merged_df.columns else 'Team_prev')
                 
-                # Apply Opponent Matchup Factor
                 merged_df['Matchup_Factor'] = merged_df[team_col].map(team_matchup_factors).fillna(1.0)
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
                 
@@ -216,16 +209,16 @@ with tab2:
                 
                 final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
                 
-                # Conditional color formatting function for Matchup_Proj / Edge
                 def color_matchup(val):
                     if val > 1.25:
-                        return 'background-color: rgba(46, 125, 50, 0.25)' # Soft green for high projections
+                        return 'background-color: rgba(46, 125, 50, 0.25)'
                     elif val < 0.80:
-                        return 'background-color: rgba(198, 40, 40, 0.25)' # Soft red for low projections
+                        return 'background-color: rgba(198, 40, 40, 0.25)'
                     return ''
 
+                # Use .map() for compatibility across pandas versions
                 st.dataframe(
-                    final_board.style.applymap(color_matchup, subset=['Matchup_Proj']),
+                    final_board.style.map(color_matchup, subset=['Matchup_Proj']),
                     use_container_width=True,
                     height=500
                 )
