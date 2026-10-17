@@ -63,68 +63,89 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
     st.subheader("Live Player Prop Line-Shopper & +EV Valuator")
-    st.write("Select a prop market and fetch live lines across sportsbooks for today's slate.")
+    st.write("First, fetch today's active games, then select a game and market to pull live bookmaker props.")
     
-    col_m1, col_m2 = st.columns([2, 2])
-    api_market_choice = col_m1.selectbox(
-        "Select API Prop Market to Fetch",
-        [
-            "player_shots_on_goal", 
-            "player_points", 
-            "player_goals", 
-            "player_assists",
-            "player_shots_on_goal_alternate",
-            "player_points_alternate"
-        ],
-        format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
-    )
+    col_f1, col_f2 = st.columns([1, 3])
+    fetch_events_btn = col_f1.button("🔄 Step 1: Load Today's Games")
     
-    fetch_clicked = col_m2.button("🔄 Fetch Live Prop Lines")
-    
-    live_games = []
-    if fetch_clicked:
+    events_list = []
+    if fetch_events_btn:
         if not api_key_input:
             st.error("⚠️ Please enter your Odds API Key in the sidebar first.")
         else:
             try:
-                books_str = ",".join(selected_books)
-                props_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
-                resp = requests.get(props_url, timeout=10)
+                events_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey={api_key_input}"
+                resp = requests.get(events_url, timeout=8)
                 if resp.status_code == 200:
-                    live_games = resp.json()
-                    st.session_state['live_games'] = live_games
-                    st.success(f"🟢 Successfully pulled live props! ({len(live_games)} games found)")
+                    events_list = resp.json()
+                    st.session_state['events_list'] = events_list
+                    st.success(f"🟢 Loaded {len(events_list)} active games!")
+                else:
+                    st.warning(f"⚠️ API Error: Status {resp.status_code}")
+            except Exception as e:
+                st.warning(f"⚠️ Connection Failed: {e}")
+    elif 'events_list' in st.session_state:
+        events_list = st.session_state['events_list']
+
+    if events_list:
+        st.divider()
+        col_m1, col_m2, col_m3 = st.columns([2, 2, 1])
+        
+        event_options = {f"{e['away_team']} @ {e['home_team']} ({e['commence_time'][:10]})": e['id'] for e in events_list}
+        selected_event_label = col_m1.selectbox("Select Game", list(event_options.keys()), key="prop_event_select")
+        selected_event_id = event_options[selected_event_label]
+        
+        api_market_choice = col_m2.selectbox(
+            "Select Prop Market",
+            [
+                "player_shots_on_goal", 
+                "player_points", 
+                "player_goals", 
+                "player_assists",
+                "player_shots_on_goal_alternate",
+                "player_points_alternate"
+            ],
+            format_func=lambda x: x.replace("player_", "").replace("_", " ").title(),
+            key="prop_market_select"
+        )
+        
+        fetch_props_btn = col_m3.button("📥 Fetch Props")
+        
+        prop_data = None
+        if fetch_props_btn:
+            try:
+                books_str = ",".join(selected_books)
+                prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{selected_event_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
+                resp = requests.get(prop_url, timeout=10)
+                if resp.status_code == 200:
+                    prop_data = resp.json()
+                    st.session_state[f'props_{selected_event_id}_{api_market_choice}'] = prop_data
+                    st.success("🟢 Successfully pulled live props for this game!")
                 else:
                     st.warning(f"⚠️ API Error: Status {resp.status_code} - Market may not be posted by books yet.")
             except Exception as e:
                 st.warning(f"⚠️ Connection Failed: {e}")
-    elif 'live_games' in st.session_state:
-        live_games = st.session_state['live_games']
+        elif f'props_{selected_event_id}_{api_market_choice}' in st.session_state:
+            prop_data = st.session_state[f'props_{selected_event_id}_{api_market_choice}']
 
-    if live_games:
-        st.write("### 🏒 Live Player Prop Board:")
-        game_options = [f"{g['away_team']} @ {g['home_team']} ({g['commence_time'][:10]})" for g in live_games]
-        selected_game_label = st.selectbox("Select Game to View Props", game_options, key="tab1_prop_game")
-        
-        selected_game_obj = live_games[game_options.index(selected_game_label)]
-        
-        prop_rows = []
-        for bookmaker in selected_game_obj.get('bookmakers', []):
-            b_title = bookmaker['title']
-            for market in bookmaker.get('markets', []):
-                for outcome in market.get('outcomes', []):
-                    if outcome.get('name') == 'Over':
-                        prop_rows.append({
-                            "Sportsbook": b_title,
-                            "Player": outcome.get('description'),
-                            "Line": outcome.get('point'),
-                            "Over Odds": decimal_to_american(outcome.get('price'))
-                        })
-        if prop_rows:
-            prop_df = pd.DataFrame(prop_rows)
-            st.dataframe(prop_df, use_container_width=True, height=450)
-        else:
-            st.info("ℹ️ No player prop markets currently posted for this game matchup.")
+        if prop_data:
+            st.write(f"### 🏒 Live Prop Board for {selected_event_label}:")
+            prop_rows = []
+            for bookmaker in prop_data.get('bookmakers', []):
+                b_title = bookmaker['title']
+                for market in bookmaker.get('markets', []):
+                    for outcome in market.get('outcomes', []):
+                        if outcome.get('name') == 'Over':
+                            prop_rows.append({
+                                "Sportsbook": b_title,
+                                "Player": outcome.get('description'),
+                                "Line": outcome.get('point'),
+                                "Over Odds": decimal_to_american(outcome.get('price'))
+                            })
+            if prop_rows:
+                st.dataframe(pd.DataFrame(prop_rows), use_container_width=True, height=450)
+            else:
+                st.info("ℹ️ No player prop lines currently posted for this specific market/game combination.")
 
     st.divider()
     st.write("### 🧮 Single Prop +EV Valuator")
