@@ -341,8 +341,27 @@ with tab3:
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists")
-        leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5)
+        leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists", key="t3_l1_name")
+        leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5, key="t3_l1_odds")
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points")
-        leg2_odds = st.number_
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points", key="t3_l2_name")
+        leg2_odds = st.number_input("Leg 2 American Odds", value=130, step=5, key="t3_l2_odds")
+        
+    dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
+    dec2 = 1 + (leg2_odds / 100) if leg2_odds > 0 else 1 + (100 / abs(leg2_odds))
+    
+    combined_parlay_dec = dec1 * dec2
+    parlay_american = int((combined_parlay_dec - 1) * 100) if combined_parlay_dec >= 2 else int(-100 / (combined_parlay_dec - 1))
+    
+    boost_val = st.number_input("Apply Profit Boost to Parlay (%)", min_value=0, max_value=100, value=30, step=5, key="t3_boost")
+    
+    profit_frac = combined_parlay_dec - 1
+    boosted_parlay_dec = 1 + (profit_frac * (1 + (boost_val / 100)))
+    boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
+    
+    st.divider()
+    col_res1, col_res2 = st.columns(2)
+    col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
+    col_res2.metric(label="Boosted Parlay Odds (+" + str(boost_val) + "%)", value=f"{boosted_parlay_american:+d}")
+    
+    st.success("🎯 **Parlay Ready:** Combining **" + leg1_name + "** and **" + leg2_name + "** with a " + str(boost_val) + "% boost yields **" + str(boosted_parlay_american) + "** odds!")
