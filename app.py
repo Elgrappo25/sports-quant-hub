@@ -7,7 +7,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and true +EV detection.")
+st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and color-coded edge detection.")
 
 # Sidebar for global settings & Live Odds configuration
 st.sidebar.header("⚙️ Global Model Settings")
@@ -23,19 +23,16 @@ selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_boo
 
 # Helper function for Poisson probability calculation
 def poisson_prob(lam, k):
-    """Calculates exact probability of k events given expected lambda rate."""
     if lam <= 0:
         return 0.0
     return (math.exp(-lam) * (lam ** k)) / math.factorial(k)
 
 def poisson_over_prob(lam, threshold):
-    """Calculates cumulative probability of exceeding a decimal threshold (e.g., > 1.5 means k >= 2)."""
     k_min = int(math.floor(threshold)) + 1
     prob_under = sum(poisson_prob(lam, i) for i in range(k_min))
     return max(0.0, min(1.0, 1.0 - prob_under))
 
 def prob_to_american(p):
-    """Converts a true probability (0 to 1) into fair American odds."""
     if p <= 0:
         return "+99999"
     if p >= 1:
@@ -118,8 +115,8 @@ with tab1:
         st.info("ℹ️ **Fairly Priced:** Market odds are closely aligned with Poisson model probability.")
 
 with tab2:
-    st.subheader("Single Dropzone: Multi-File NST Processor & Market-Specific Matchup Matrix")
-    st.write("Drop your 4 Natural Stat Trick count files below. Matchup factors dynamically adapt their defensive metric based on your selected market.")
+    st.subheader("Single Dropzone: Multi-File NST Processor & Color-Coded Alt-Line Matrix")
+    st.write("Drop your 4 Natural Stat Trick count files below. Matchup factors and probabilities are color-coded for fast scanning.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -209,13 +206,12 @@ with tab2:
                 if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     
-                    # MARKET-SPECIFIC DEFENSIVE METRIC MAPPING
                     if batch_market == "Shots on Goal (SOG)":
-                        candidates = ['SA', 'CA', 'FA'] # Shots Against / Corsi Against
+                        candidates = ['SA', 'CA', 'FA']
                     elif batch_market == "Anytime Goal Scorer":
-                        candidates = ['HDCA', 'HDCF', 'CA'] # High-Danger Chances Against
+                        candidates = ['HDCA', 'HDCF', 'CA']
                     else:
-                        candidates = ['SCA', 'SCF', 'CA'] # Scoring Chances Against for Points & Assists
+                        candidates = ['SCA', 'SCF', 'CA']
                         
                     stat_col = next((c for c in candidates if c in curr_team_df.columns), 'CA')
                     curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
@@ -292,23 +288,23 @@ with tab2:
             
             final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
 
-            def high_pop_text(val):
+            def color_matrix_cells(val):
                 if isinstance(val, (int, float)):
-                    if val > 60.0:
-                        return 'color: #00E676; font-weight: bold; font-size: 1.05em;'
-                    elif val < 30.0:
-                        return 'color: #FF5252; font-weight: bold; font-size: 1.05em;'
+                    if val > 1.05 or val > 55.0: # Green for favorable matchups or high probabilities
+                        return 'color: #00E676; font-weight: bold;'
+                    elif val < 0.95 or val < 35.0: # Red for tough matchups or low probabilities
+                        return 'color: #FF5252; font-weight: bold;'
                 return 'color: #CFD8DC;'
 
             st.dataframe(
-                final_board.style.map(high_pop_text, subset=['Model_Over_Prob_%']),
+                final_board.style.map(color_matrix_cells, subset=['Matchup_Factor', 'Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
         else:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drop all 4 files above to generate Poisson alt-line projections.")
+        st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
@@ -335,8 +331,7 @@ with tab3:
     boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
     
     st.divider()
-    col_res1, col_res2 = st.columns(2)
-    col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
+    col_res1, col_res2 = st.columns(2)     col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
     col_res2.metric(label=f"Boosted Parlay Odds (+{boost_val}%)", value=f"{boosted_parlay_american:+d}")
     
     st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost yields **{boosted_parlay_american:+d}** odds!")
