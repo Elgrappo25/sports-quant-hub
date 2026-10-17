@@ -106,7 +106,6 @@ with tab1:
                     
                     for idx, ev in enumerate(events_list):
                         ev_id = ev['id']
-                        # Expanded regions to include us, us2, ca (BetRivers), and eu (Bet365)
                         prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2,ca,eu&markets={api_market_choice}&bookmakers={books_str}"
                         resp = requests.get(prop_url, timeout=6)
                         if resp.status_code == 200:
@@ -137,14 +136,14 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
-        # Strict Main-Line Filtering to block alt-line bleeding
+        # AIRTIGHT MAIN LINE FILTERING
         if "alternate" not in api_market_choice:
-            if api_market_choice == "player_shots_on_goal":
-                # Only accept standard main lines (1.5, 2.5, 3.5)
+            if "shots_on_goal" in api_market_choice:
+                # Keep standard SOG main lines (typically 1.5, 2.5, 3.5)
                 master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
-            elif api_market_choice in ["player_points", "player_assists", "player_goals"]:
-                # Only accept standard main lines (0.5)
-                master_df = master_df[master_df['Line'].isin([0.5])]
+            elif any(m in api_market_choice for m in ["points", "goals", "assists"]):
+                # Keep strictly 0.5 for standard player scoring props
+                master_df = master_df[master_df['Line'] == 0.5]
 
         # Merge with Tab 2 model data based on selected market category
         if 'raw_player_dfs' in st.session_state:
@@ -443,7 +442,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
