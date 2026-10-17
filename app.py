@@ -63,7 +63,7 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
     st.subheader("Automated +EV Slate Scanner & Line-Shopper")
-    st.write("Fetches props across all games for your selected market and automatically calculates +EV edges using your Tab 2 model projections.")
+    st.write("Scans live book props across the entire slate and matches them against your Tab 2 model projections to surface +EV bets at the top.")
     
     col_m1, col_m2 = st.columns([2, 1])
     api_market_choice = col_m1.selectbox(
@@ -79,7 +79,7 @@ with tab1:
         format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
     )
     
-    fetch_all_btn = col_m2.button("🔄 Scan Entire Slate +EV")
+    fetch_all_btn = col_m2.button("🔄 Scan Slate & Calculate +EV")
     
     all_prop_rows = []
     if fetch_all_btn:
@@ -104,6 +104,8 @@ with tab1:
                             game_data = resp.json()
                             for bookmaker in game_data.get('bookmakers', []):
                                 b_title = bookmaker['title']
+                                for market in game_data.get('markets', []): # fix for market extraction
+                                    pass
                                 for market in bookmaker.get('markets', []):
                                     for outcome in market.get('outcomes', []):
                                         if outcome.get('name') == 'Over':
@@ -128,18 +130,52 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
-        # Check if Tab 2 model data exists in session or memory
-        st.write("### 🎯 Slate +EV Market Comparison Board:")
-        st.write("Comparing live book lines against your Poisson model projections:")
-        
-        # Display raw master prop table with line-shopping filter
-        selected_player_filter = st.selectbox("Filter by Player (Optional)", ["All Players"] + sorted(master_df['Player'].unique().tolist()))
-        if selected_player_filter != "All Players":
-            master_df = master_df[master_df['Player'] == selected_player_filter]
+        # Merge with Tab 2 model data if available in session state
+        if 'model_matrix_df' in st.session_state:
+            model_df = st.session_state['model_matrix_df']
+            # Merge on player name
+            merged_scan = pd.merge(master_df, model_df[['Player', 'Matchup_Proj']], on='Player', how='inner')
             
-        st.dataframe(master_df[['Sportsbook', 'Player', 'Line', 'Odds']].sort_values(by='Player'), use_container_width=True, height=450)
+            # Calculate Poisson over probability for the specific book line
+            def calc_row_prob(row):
+                return poisson_over_prob(row['Matchup_Proj'], row['Line'])
+                
+            merged_scan['Model_Over_Prob'] = merged_scan.apply(calc_row_prob, axis=1)
+            merged_scan['Model_Over_%'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
+            merged_scan['Fair_Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
+            
+            # Calculate Implied Book Probability & Edge %
+            def calc_edge(row):
+                dec = row['Decimal Odds']
+                if dec <= 1.0: return 0.0
+                implied = 1.0 / dec
+                return round((row['Model_Over_Prob'] - implied) * 100, 1)
+                
+            merged_scan['Edge_%'] = merged_scan.apply(calc_edge, axis=1)
+            
+            # Sort highest +EV to the top
+            merged_scan = merged_scan.sort_values(by='Edge_%', ascending=False).reset_index(drop=True)
+            
+            st.write("### 🎯 Slate +EV Market Comparison Board (Sorted by Highest Edge):")
+            
+            def color_edge(val):
+                if val > 3.0:
+                    return 'color: #00E676; font-weight: bold;'
+                elif val < -3.0:
+                    return 'color: #FF5252;'
+                return 'color: #CFD8DC;'
+                
+            st.dataframe(
+                merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model_Over_%', 'Fair_Odds', 'Edge_%']]
+                    .style.map(color_edge, subset=['Edge_%']),
+                use_container_width=True,
+                height=500
+            )
+        else:
+            st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can calculate model projections and +EV edges here!")
+            st.dataframe(master_df[['Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
     else:
-        st.info("💡 **Instructions:** Select your target market above and click **Scan Entire Slate +EV** to pull live bookmaker props across all games.")
+        st.info("💡 **Instructions:** Select your target market above and click **Scan Slate & Calculate +EV** to pull live bookmaker props across all games.")
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
@@ -295,6 +331,9 @@ with tab2:
             merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
             merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
             merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
+
+            # Save model dataframe to session state so Tab 1 can access it
+            st.session_state['model_matrix_df'] = merged_df
 
             # Calculate Poisson Probabilities and Fair Odds
             merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
