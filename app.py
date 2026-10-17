@@ -6,6 +6,15 @@ from datetime import date
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
+# Custom CSS for professional styling & eye candy
+st.markdown("""
+    <style>
+        .main { background-color: #0e1117; }
+        .stMetric { background-color: #161b22; padding: 15px; border-radius: 10px; border: 1px solid #30363d; }
+        .stDataFrame { border-radius: 10px; overflow: hidden; }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
 
@@ -79,7 +88,7 @@ with tab1:
         format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
     )
     
-    fetch_all_btn = col_m2.button("🔄 Scan Slate & Calculate +EV")
+    fetch_all_btn = col_m2.button("🔄 Scan Slate & Calculate +EV", use_container_width=True)
     
     all_prop_rows = []
     if fetch_all_btn:
@@ -144,8 +153,8 @@ with tab1:
                 return poisson_over_prob(row['Matchup_Proj'], row['Line'])
                 
             merged_scan['Model_Over_Prob'] = merged_scan.apply(calc_row_prob, axis=1)
-            merged_scan['Model_Over_%'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
-            merged_scan['Fair_Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
+            merged_scan['Model Over (%)'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
+            merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
             
             def calc_edge(row):
                 dec = row['Decimal Odds']
@@ -153,10 +162,24 @@ with tab1:
                 implied = 1.0 / dec
                 return round((row['Model_Over_Prob'] - implied) * 100, 1)
                 
-            merged_scan['Edge_%'] = merged_scan.apply(calc_edge, axis=1)
-            merged_scan = merged_scan.sort_values(by='Edge_%', ascending=False).reset_index(drop=True)
+            merged_scan['Edge (%)'] = merged_scan.apply(calc_edge, axis=1)
+            merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
             
-            st.write("### 🎯 Slate +EV Market Comparison Board (Filtered & Sorted by Edge):")
+            # Summary Metrics Bar
+            pos_ev_count = len(merged_scan[merged_scan['Edge (%)'] > 3.0])
+            top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Scanned Props", len(merged_scan))
+            m2.metric("Strong +EV Opportunities", pos_ev_count)
+            m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
+            
+            st.divider()
+            st.write("### 🎯 Slate +EV Market Comparison Board:")
+            
+            # Clean column mapping for presentation
+            display_scan = merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
+            display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
             
             def color_edge(val):
                 if val > 3.0:
@@ -166,8 +189,7 @@ with tab1:
                 return 'color: #CFD8DC;'
                 
             st.dataframe(
-                merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model_Over_%', 'Fair_Odds', 'Edge_%']]
-                    .style.map(color_edge, subset=['Edge_%']),
+                display_scan.style.map(color_edge, subset=['Edge (%)']),
                 use_container_width=True,
                 height=500
             )
