@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Multi-market custom algorithmic pricing, schedule-filtered slate matching, and multi-season processing.")
+st.markdown("### Count-based per-game scaling, schedule-filtered slate matching, and multi-season processing.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -40,15 +40,15 @@ with tab1:
         )
 
     if market_type == "Shots on Goal (SOG)":
-        default_base, default_curr, default_line, default_odds = 3.35, 3.60, 3.5, -120
+        default_base, default_curr, default_line, default_odds = 3.74, 2.29, 3.5, -120
     elif market_type == "Points (G+A)":
-        default_base, default_curr, default_line, default_odds = 1.15, 1.30, 1.5, +115
+        default_base, default_curr, default_line, default_odds = 1.68, 2.57, 1.5, +115
     elif market_type == "Anytime Goal Scorer":
-        default_base, default_curr, default_line, default_odds = 0.55, 0.65, 0.5, +135
+        default_base, default_curr, default_line, default_odds = 0.58, 0.57, 0.5, +135
     elif market_type == "Assists Only":
-        default_base, default_curr, default_line, default_odds = 0.70, 0.80, 0.5, -110
+        default_base, default_curr, default_line, default_odds = 1.10, 1.71, 0.5, -110
     else:  # Power-Play Points (PPP)
-        default_base, default_curr, default_line, default_odds = 0.35, 0.45, 0.5, +140
+        default_base, default_curr, default_line, default_odds = 0.75, 0.85, 0.5, +140
 
     with col2:
         baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
@@ -94,7 +94,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick files below. Each market uses custom algorithmic scaling.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections are calculated directly from Total Counts / GP.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -122,14 +122,19 @@ with tab2:
         
         for file in uploaded_files:
             fname = file.name.lower()
-            if "player" in fname and "25-26" in fname:
-                curr_player_df = pd.read_csv(file)
-            elif "player" in fname:
-                prev_player_df = pd.read_csv(file)
-            elif "games" in fname and "25-26" in fname:
-                curr_team_df = pd.read_csv(file)
+            if "player" in fname:
+                temp_df = pd.read_csv(file)
+                # Automatically distinguish current season (small GP / early season) vs previous season (large GP)
+                if 'GP' in temp_df.columns and temp_df['GP'].max() <= 20:
+                    curr_player_df = temp_df
+                else:
+                    prev_player_df = temp_df
             elif "games" in fname:
-                prev_team_df = pd.read_csv(file)
+                temp_df = pd.read_csv(file)
+                if 'GP' in temp_df.columns and temp_df['GP'].max() <= 20:
+                    curr_team_df = temp_df
+                else:
+                    prev_team_df = temp_df
                 
         if curr_player_df is not None and prev_player_df is not None:
             active_teams = set()
@@ -146,41 +151,29 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule fetch warning: {e}")
 
-            if batch_market == "Shots on Goal (SOG)":
-                target_col = "Shots/60"
-                is_rate_volume = True
-            elif batch_market == "Points (G+A)":
-                target_col = "Total Points/60"
-                is_rate_volume = False
-            elif batch_market == "Anytime Goal Scorer":
-                target_col = "Goals/60"
-                is_rate_volume = False
-            elif batch_market == "Assists Only":
-                target_col = "Total Assists/60"
-                is_rate_volume = False
-            else:
-                target_col = "Goals/60"
-                is_rate_volume = False
+            # Map markets to Count columns in NST files
+            col_map = {
+                "Shots on Goal (SOG)": "Shots",
+                "Points (G+A)": "Total Points",
+                "Anytime Goal Scorer": "Goals",
+                "Assists Only": "Total Assists",
+                "Power-Play Points (PPP)": "Total Points" # fallback if specific PPP col differs
+            }
+            target_col = col_map.get(batch_market, "Total Points")
 
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
-                toi_prev = merged_df.get('TOI/GP_prev', pd.Series([18.0]*len(merged_df)))
-                toi_curr = merged_df.get('TOI/GP_curr', pd.Series([18.0]*len(merged_df)))
+                # PER-GAME COUNT CALCULATION: Total Count / Games Played (GP)
+                gp_prev = merged_df.get('GP_prev', pd.Series([82]*len(merged_df))).replace(0, 1)
+                gp_curr = merged_df.get('GP_curr', pd.Series([5]*len(merged_df))).replace(0, 1)
                 
-                toi_prev_safe = toi_prev.apply(lambda x: x if pd.notnull(x) and x > 5 else 18.0)
-                toi_curr_safe = toi_curr.apply(lambda x: x if pd.notnull(x) and x > 5 else 18.0)
+                merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] / gp_prev
+                merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] / gp_curr
                 
-                merged_df['Baseline_Stat'] = (merged_df[f'{target_col}_prev'] / 60.0) * toi_prev_safe
-                merged_df['Current_Stat'] = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr_safe
-                
-                if not is_rate_volume:
-                    merged_df['Current_Stat'] = merged_df['Current_Stat'].apply(lambda x: min(x, 1.85) if pd.notnull(x) else 0.5)
-                    merged_df['Baseline_Stat'] = merged_df['Baseline_Stat'].apply(lambda x: min(x, 1.75) if pd.notnull(x) else 0.5)
-
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else 'Team'
+                team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else ('Team' if 'Team' in merged_df.columns else 'Team_prev')
                 
                 filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
                 if filter_slate and active_teams and team_col in merged_df.columns:
