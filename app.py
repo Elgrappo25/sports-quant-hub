@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based per-game scaling, slate filtering, and minimum sample size controls.")
+st.markdown("### Count-based per-game scaling, opponent matchup adjustments, and conditional color-coding.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections are calculated directly from Total Counts / GP.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections include opponent matchup factors and color coding.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -137,10 +137,26 @@ with tab2:
                     prev_team_df = temp_df
                 
         if curr_player_df is not None and prev_player_df is not None:
+            # Fetch NHL schedule and opposing team context
             active_teams = set()
+            team_matchup_factors = {} # maps team abbrev to defensive multiplier
             try:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
                 sched_resp = requests.get(sched_url).json()
+                
+                # Build simple team goals-against lookup from team files if available
+                team_ga_dict = {}
+                if curr_team_df is not None and 'Team' in curr_team_df.columns and 'CA' in curr_team_df.columns:
+                    # Higher CA (Corsi Against) or lower suppression = weaker defense
+                    mean_ca = curr_team_df['CA'].mean()
+                    for _, row in curr_team_df.iterrows():
+                        t_abbrev = row['Team']
+                        ca_val = row.get('CA', mean_ca)
+                        # Multiplier relative to league average
+                        factor = ca_val / mean_ca if mean_ca > 0 else 1.0
+                        # Clamp factor between 0.85 and 1.15 for realistic variance
+                        team_ga_dict[t_abbrev] = max(0.85, min(1.15, factor))
+
                 for week_day in sched_resp.get("gameWeek", []):
                     if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
                         for game in week_day.get("games", []):
@@ -148,8 +164,15 @@ with tab2:
                             home_abbrev = game.get("homeTeam", {}).get("abbrev")
                             if away_abbrev: active_teams.add(away_abbrev)
                             if home_abbrev: active_teams.add(home_abbrev)
+                            
+                            # Assign opponent factor
+                            if away_abbrev and home_abbrev:
+                                away_factor = team_ga_dict.get(home_abbrev, 1.0) # away team plays home team's defense
+                                home_factor = team_ga_dict.get(away_abbrev, 1.0) # home team plays away team's defense
+                                team_matchup_factors[away_abbrev] = away_factor
+                                team_matchup_factors[home_abbrev] = home_factor
             except Exception as e:
-                st.warning(f"Schedule fetch warning: {e}")
+                st.warning(f"Schedule/Matchup fetch warning: {e}")
 
             col_map = {
                 "Shots on Goal (SOG)": "Shots",
@@ -166,7 +189,6 @@ with tab2:
                 gp_prev = merged_df.get('GP_prev', pd.Series([82]*len(merged_df))).replace(0, 1)
                 gp_curr = merged_df.get('GP_curr', pd.Series([5]*len(merged_df))).replace(0, 1)
                 
-                # Apply minimum games played filter to remove small-sample noise
                 merged_df = merged_df[merged_df['GP_curr'] >= min_gp].copy()
                 
                 merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] / gp_prev
@@ -175,6 +197,10 @@ with tab2:
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
                 team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else ('Team' if 'Team' in merged_df.columns else 'Team_prev')
+                
+                # Apply Opponent Matchup Factor
+                merged_df['Matchup_Factor'] = merged_df[team_col].map(team_matchup_factors).fillna(1.0)
+                merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
                 
                 filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
                 if filter_slate and active_teams and team_col in merged_df.columns:
@@ -186,9 +212,20 @@ with tab2:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
                 st.write(f"### 📈 Slate Projections Board ({batch_market}):")
-                display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
+                display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
+                
+                final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
+                
+                # Conditional color formatting function for Matchup_Proj / Edge
+                def color_matchup(val):
+                    if val > 1.25:
+                        return 'background-color: rgba(46, 125, 50, 0.25)' # Soft green for high projections
+                    elif val < 0.80:
+                        return 'background-color: rgba(198, 40, 40, 0.25)' # Soft red for low projections
+                    return ''
+
                 st.dataframe(
-                    merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True),
+                    final_board.style.applymap(color_matchup, subset=['Matchup_Proj']),
                     use_container_width=True,
                     height=500
                 )
@@ -197,7 +234,7 @@ with tab2:
         else:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drag and drop all 4 files above to generate slate projections.")
+        st.info("💡 **Instructions:** Drop all 4 files above to generate slate projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
