@@ -27,7 +27,7 @@ st.sidebar.divider()
 st.sidebar.header("🔌 Live Props & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
 available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet", "betrivers", "pinnacle"])
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"])
 
 # Helper functions for Poisson probability calculation
 def poisson_prob(lam, k):
@@ -95,7 +95,6 @@ with tab1:
             st.error("⚠️ Please enter your Odds API Key in the sidebar first.")
         else:
             try:
-                # Corrected domain endpoint
                 events_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey={api_key_input}"
                 events_resp = requests.get(events_url, timeout=8)
                 if events_resp.status_code == 200:
@@ -107,8 +106,8 @@ with tab1:
                     
                     for idx, ev in enumerate(events_list):
                         ev_id = ev['id']
-                        # Corrected domain endpoint with expanded US and CA regions
-                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2,ca&markets={api_market_choice}&bookmakers={books_str}"
+                        # Expanded regions to include us, us2, ca (BetRivers), and eu (Bet365)
+                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2,ca,eu&markets={api_market_choice}&bookmakers={books_str}"
                         resp = requests.get(prop_url, timeout=6)
                         if resp.status_code == 200:
                             game_data = resp.json()
@@ -120,7 +119,7 @@ with tab1:
                                             all_prop_rows.append({
                                                 "Sportsbook": b_title,
                                                 "Player": outcome.get('description').strip(),
-                                                "Line": outcome.get('point'),
+                                                "Line": float(outcome.get('point')),
                                                 "Decimal Odds": outcome.get('price'),
                                                 "Odds": decimal_to_american(outcome.get('price'))
                                             })
@@ -138,11 +137,13 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
-        # Filter strictly for main lines if scanning standard markets
+        # Strict Main-Line Filtering to block alt-line bleeding
         if "alternate" not in api_market_choice:
             if api_market_choice == "player_shots_on_goal":
+                # Only accept standard main lines (1.5, 2.5, 3.5)
                 master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
             elif api_market_choice in ["player_points", "player_assists", "player_goals"]:
+                # Only accept standard main lines (0.5)
                 master_df = master_df[master_df['Line'].isin([0.5])]
 
         # Merge with Tab 2 model data based on selected market category
