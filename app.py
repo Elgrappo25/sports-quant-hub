@@ -7,7 +7,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, Poisson alt-line math, live bookmaker line-shopping, and true +EV detection.")
+st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and true +EV detection.")
 
 # Sidebar for global settings & Live Odds configuration
 st.sidebar.header("⚙️ Global Model Settings")
@@ -30,7 +30,6 @@ def poisson_prob(lam, k):
 
 def poisson_over_prob(lam, threshold):
     """Calculates cumulative probability of exceeding a decimal threshold (e.g., > 1.5 means k >= 2)."""
-    # threshold is e.g. 1.5, so we sum probabilities for k >= int(threshold) + 1
     k_min = int(math.floor(threshold)) + 1
     prob_under = sum(poisson_prob(lam, i) for i in range(k_min))
     return max(0.0, min(1.0, 1.0 - prob_under))
@@ -119,8 +118,8 @@ with tab1:
         st.info("ℹ️ **Fairly Priced:** Market odds are closely aligned with Poisson model probability.")
 
 with tab2:
-    st.subheader("Single Dropzone: Multi-File NST Processor & Poisson Alt-Line Matrix")
-    st.write("Drop your 4 Natural Stat Trick count files below. The board projects expected rates and fair alt-line probabilities.")
+    st.subheader("Single Dropzone: Multi-File NST Processor & Market-Specific Matchup Matrix")
+    st.write("Drop your 4 Natural Stat Trick count files below. Matchup factors dynamically adapt their defensive metric based on your selected market.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -136,7 +135,7 @@ with tab2:
     target_line_choice = st.selectbox(
         "Select Target Threshold Line for Alt Matrix",
         [0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
-        index=1, # Default to 1.5
+        index=1,
         key="batch_alt_line"
     )
     
@@ -210,12 +209,13 @@ with tab2:
                 if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     
+                    # MARKET-SPECIFIC DEFENSIVE METRIC MAPPING
                     if batch_market == "Shots on Goal (SOG)":
-                        candidates = ['CA', 'FA', 'SA']
-                    elif batch_market in ["Anytime Goal Scorer"]:
-                        candidates = ['HDCF', 'HDCA', 'CA']
+                        candidates = ['SA', 'CA', 'FA'] # Shots Against / Corsi Against
+                    elif batch_market == "Anytime Goal Scorer":
+                        candidates = ['HDCA', 'HDCF', 'CA'] # High-Danger Chances Against
                     else:
-                        candidates = ['SCF', 'SCA', 'CA']
+                        candidates = ['SCA', 'SCF', 'CA'] # Scoring Chances Against for Points & Assists
                         
                     stat_col = next((c for c in candidates if c in curr_team_df.columns), 'CA')
                     curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
@@ -226,7 +226,7 @@ with tab2:
                         val = row.get(stat_col, mean_val)
                         factor = val / mean_val if mean_val > 0 else 1.0
                         if pd.notnull(t_abbrev):
-                            team_stat_dict[t_abbrev] = max(0.80, min(1.20, factor))
+                            team_matchup_factors[t_abbrev] = max(0.80, min(1.20, factor))
 
                 for week_day in sched_resp.get("gameWeek", []):
                     if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
@@ -239,11 +239,6 @@ with tab2:
                             if away_abbrev and home_abbrev:
                                 team_opponents[away_abbrev] = f"@{home_abbrev}"
                                 team_opponents[home_abbrev] = f"vs {away_abbrev}"
-                                
-                                away_factor = team_stat_dict.get(home_abbrev, 1.0)
-                                home_factor = team_stat_dict.get(away_abbrev, 1.0)
-                                team_matchup_factors[away_abbrev] = away_factor
-                                team_matchup_factors[home_abbrev] = home_factor
             except Exception as e:
                 st.warning(f"Schedule/Matchup fetch warning: {e}")
 
@@ -278,7 +273,7 @@ with tab2:
             merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
             merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
 
-            # Calculate Poisson Probabilities and Fair Odds for the chosen threshold line
+            # Calculate Poisson Probabilities and Fair Odds
             merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
             merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
             merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
@@ -293,7 +288,7 @@ with tab2:
                     st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
             
             st.write(f"### 📈 Slate Alt-Line Matrix ({batch_market} > {target_line_choice}):")
-            display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Matchup_Proj', 'Model_Over_Prob_%', 'Fair_American_Odds']
+            display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Matchup_Factor', 'Matchup_Proj', 'Model_Over_Prob_%', 'Fair_American_Odds']
             
             final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
 
