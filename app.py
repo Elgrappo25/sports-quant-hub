@@ -150,14 +150,19 @@ with tab2:
             
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
-                merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] * (merged_df.get('TOI/GP_prev', 15) / 60)
-                merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] * (merged_df.get('TOI/GP_curr', 15) / 60)
+                
+                # Correct per-game conversion using TOI/GP divided by 60
+                toi_prev = merged_df.get('TOI/GP_prev', 18.0)
+                toi_curr = merged_df.get('TOI/GP_curr', 18.0)
+                
+                merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] * (toi_prev / 60.0)
+                merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] * (toi_curr / 60.0)
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                st.success(f"Successfully merged {len(merged_df)} players across seasons for **{batch_market}**!")
-                st.write("### 📈 Top Projections Board:")
+                st.success(f"Successfully processed realistic per-game projections for **{batch_market}** across {len(merged_df)} players!")
+                st.write("### 📈 Top Projections Board (Per-Game Output):")
                 display_cols = ['Player', 'Team_curr', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
-                st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).head(25))
+                st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True).head(25))
             else:
                 st.error(f"Could not find column '{target_col}' in player files.")
         else:
