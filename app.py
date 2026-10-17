@@ -118,7 +118,7 @@ with tab1:
                                         if outcome.get('name') == 'Over':
                                             all_prop_rows.append({
                                                 "Sportsbook": b_title,
-                                                "Player": outcome.get('description'),
+                                                "Player": outcome.get('description').strip(),
                                                 "Line": outcome.get('point'),
                                                 "Decimal Odds": outcome.get('price'),
                                                 "Odds": decimal_to_american(outcome.get('price'))
@@ -146,53 +146,58 @@ with tab1:
 
         # Merge with Tab 2 model data if available in session state
         if 'model_matrix_df' in st.session_state:
-            model_df = st.session_state['model_matrix_df']
+            model_df = st.session_state['model_matrix_df'].copy()
+            model_df['Player'] = model_df['Player'].astype(str).str.strip()
+            
+            # Perform exact inner join on player name
             merged_scan = pd.merge(master_df, model_df[['Player', 'Matchup_Proj']], on='Player', how='inner')
             
-            def calc_row_prob(row):
-                return poisson_over_prob(row['Matchup_Proj'], row['Line'])
+            if len(merged_scan) == 0:
+                st.warning("⚠️ Player name mismatch between live odds and uploaded CSVs. Please check player name formatting.")
+            else:
+                def calc_row_prob(row):
+                    return poisson_over_prob(row['Matchup_Proj'], row['Line'])
+                    
+                merged_scan['Model_Over_Prob'] = merged_scan.apply(calc_row_prob, axis=1)
+                merged_scan['Model Over (%)'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
+                merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
                 
-            merged_scan['Model_Over_Prob'] = merged_scan.apply(calc_row_prob, axis=1)
-            merged_scan['Model Over (%)'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
-            merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
-            
-            def calc_edge(row):
-                dec = row['Decimal Odds']
-                if dec <= 1.0: return 0.0
-                implied = 1.0 / dec
-                return round((row['Model_Over_Prob'] - implied) * 100, 1)
+                def calc_edge(row):
+                    dec = row['Decimal Odds']
+                    if dec <= 1.0: return 0.0
+                    implied = 1.0 / dec
+                    return round((row['Model_Over_Prob'] - implied) * 100, 1)
+                    
+                merged_scan['Edge (%)'] = merged_scan.apply(calc_edge, axis=1)
+                merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
                 
-            merged_scan['Edge (%)'] = merged_scan.apply(calc_edge, axis=1)
-            merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
-            
-            # Summary Metrics Bar
-            pos_ev_count = len(merged_scan[merged_scan['Edge (%)'] > 3.0])
-            top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Scanned Props", len(merged_scan))
-            m2.metric("Strong +EV Opportunities", pos_ev_count)
-            m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
-            
-            st.divider()
-            st.write("### 🎯 Slate +EV Market Comparison Board:")
-            
-            # Clean column mapping for presentation
-            display_scan = merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
-            display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
-            
-            def color_edge(val):
-                if val > 3.0:
-                    return 'color: #00E676; font-weight: bold;'
-                elif val < -3.0:
-                    return 'color: #FF5252;'
-                return 'color: #CFD8DC;'
+                # Summary Metrics Bar
+                pos_ev_count = len(merged_scan[merged_scan['Edge (%)'] > 3.0])
+                top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
                 
-            st.dataframe(
-                display_scan.style.map(color_edge, subset=['Edge (%)']),
-                use_container_width=True,
-                height=500
-            )
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Total Scanned Props", len(merged_scan))
+                m2.metric("Strong +EV Opportunities", pos_ev_count)
+                m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
+                
+                st.divider()
+                st.write("### 🎯 Slate +EV Market Comparison Board:")
+                
+                display_scan = merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
+                display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
+                
+                def color_edge(val):
+                    if val > 3.0:
+                        return 'color: #00E676; font-weight: bold;'
+                    elif val < -3.0:
+                        return 'color: #FF5252;'
+                    return 'color: #CFD8DC;'
+                    
+                st.dataframe(
+                    display_scan.style.map(color_edge, subset=['Edge (%)']),
+                    use_container_width=True,
+                    height=500
+                )
         else:
             st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can calculate model projections and +EV edges here!")
             st.dataframe(master_df[['Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
