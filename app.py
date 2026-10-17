@@ -95,7 +95,8 @@ with tab1:
             st.error("⚠️ Please enter your Odds API Key in the sidebar first.")
         else:
             try:
-                events_url = f"https://api-web.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey={api_key_input}"
+                # Corrected domain endpoint
+                events_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey={api_key_input}"
                 events_resp = requests.get(events_url, timeout=8)
                 if events_resp.status_code == 200:
                     events_list = events_resp.json()
@@ -106,8 +107,8 @@ with tab1:
                     
                     for idx, ev in enumerate(events_list):
                         ev_id = ev['id']
-                        # Expanded regions to include US and Canada (ca) for full sportsbook coverage
-                        prop_url = f"https://api-web.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2,ca&markets={api_market_choice}&bookmakers={books_str}"
+                        # Corrected domain endpoint with expanded US and CA regions
+                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2,ca&markets={api_market_choice}&bookmakers={books_str}"
                         resp = requests.get(prop_url, timeout=6)
                         if resp.status_code == 200:
                             game_data = resp.json()
