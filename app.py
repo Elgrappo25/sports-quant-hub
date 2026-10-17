@@ -1,18 +1,18 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Sports Quant Hub - NHL Suite", page_icon="🏒", layout="wide")
+st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
-st.title("🏒 NHL Quant Terminal: Pro Market Suite")
-st.markdown("### Multi-market evaluation including SOG, Goals, Points, Assists, Power-Play Points, and Flexible Boost Optimization.")
+st.title("🏒 NHL Quant Terminal: Production Suite")
+st.markdown("### Live multi-market evaluation, NST batch sheet processing, and boost-optimized parlay calculations.")
 
-# Sidebar for global settings (Now using a custom number input from 0 to 100%)
+# Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 # Navigation Tabs
-tab1, tab2, tab3 = st.tabs(["📊 Smart Market Evaluator", "📁 Batch CSV Data Sheet", "🚀 Boost & Parlay Optimizer"])
+tab1, tab2, tab3 = st.tabs(["📊 Smart Market Evaluator", "📁 NST Batch CSV Uploader", "🚀 Boost & Parlay Optimizer"])
 
 with tab1:
     st.subheader("Dynamic Prop & Alt-Line Evaluator")
@@ -32,32 +32,17 @@ with tab1:
             ]
         )
 
-    # Automatically set smart defaults based on selected market type
+    # Smart defaults based on market type
     if market_type == "Shots on Goal (SOG)":
-        default_base = 3.85
-        default_curr = 4.20
-        default_line = 3.5
-        default_odds = -120
+        default_base, default_curr, default_line, default_odds = 3.85, 4.20, 3.5, -120
     elif market_type == "Points (G+A)":
-        default_base = 1.15
-        default_curr = 1.30
-        default_line = 1.5
-        default_odds = +115
+        default_base, default_curr, default_line, default_odds = 1.15, 1.30, 1.5, +115
     elif market_type == "Anytime Goal Scorer":
-        default_base = 0.65
-        default_curr = 0.75
-        default_line = 0.5
-        default_odds = +135
+        default_base, default_curr, default_line, default_odds = 0.65, 0.75, 0.5, +135
     elif market_type == "Assists Only":
-        default_base = 0.80
-        default_curr = 0.90
-        default_line = 0.5
-        default_odds = -110
+        default_base, default_curr, default_line, default_odds = 0.80, 0.90, 0.5, -110
     else:  # Power-Play Points (PPP)
-        default_base = 0.45
-        default_curr = 0.55
-        default_line = 0.5
-        default_odds = +140
+        default_base, default_curr, default_line, default_odds = 0.45, 0.55, 0.5, +140
 
     with col2:
         baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
@@ -73,16 +58,14 @@ with tab1:
     st.markdown(f"### 📈 Model Output: {market_type}")
 
     col_a, col_b, col_c = st.columns(3)
-
     col_a.metric(label=f"Blended Expected Value", value=f"{blended_projection:.2f}")
 
-    # Convert American odds to decimal
+    # Odds conversion & boost calculation
     if sportsbook_odds > 0:
         dec_odds = 1 + (sportsbook_odds / 100)
     else:
         dec_odds = 1 + (100 / abs(sportsbook_odds))
 
-    # Apply global boost if active
     if global_boost > 0:
         profit_fraction = dec_odds - 1
         boosted_profit = profit_fraction * (1 + (global_boost / 100))
@@ -106,25 +89,25 @@ with tab1:
         st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
 
 with tab2:
-    st.subheader("Upload Daily Data Sheet")
-    st.write("Upload a CSV file containing player stats to batch-calculate edges across the entire slate.")
-    st.info("💡 **Required CSV Column Names:** `Player`, `Baseline_Stat`, `Current_Stat`, `Line`, `Odds`")
+    st.subheader("Natural Stat Trick Batch Data Sheet Processor")
+    st.write("Upload your exported NST CSV data sheet to instantly compute edges across all players.")
+    st.info("💡 **Expected CSV Columns:** `Player`, `Baseline_Stat`, `Current_Stat`, `Line`, `Odds`")
     
-    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+    uploaded_file = st.file_uploader("Choose a Natural Stat Trick CSV Export", type="csv")
     
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
-        st.write("### 📋 Raw Uploaded Data:")
-        st.dataframe(df)
+        st.write("### 📋 Raw Uploaded Data Preview:")
+        st.dataframe(df.head(10))
         try:
             df['Blended_Proj'] = (df['Baseline_Stat'] * (1 - (season_weight / 100))) + (df['Current_Stat'] * (season_weight / 100))
             df['Edge'] = df['Blended_Proj'] - df['Line']
             st.write("### 📈 Processed Model Edges (Sorted High to Low):")
             st.dataframe(df.sort_values(by='Edge', ascending=False))
         except Exception as e:
-            st.error(f"Error processing columns. Ensure column names match: Player, Baseline_Stat, Current_Stat, Line, Odds. Details: {e}")
+            st.error(f"Error processing columns. Please ensure your CSV headers include: Player, Baseline_Stat, Current_Stat, Line, Odds. Details: {e}")
     else:
-        st.write("### 🔎 Example CSV Format Preview:")
+        st.write("### 🔎 Example Batch Template Format:")
         example_data = pd.DataFrame({
             'Player': ['Connor McDavid', 'Cale Makar', 'Leon Draisaitl', 'Auston Matthews'],
             'Baseline_Stat': [0.90, 0.50, 0.85, 0.65],
@@ -133,6 +116,7 @@ with tab2:
             'Odds': [-110, +130, -105, +170]
         })
         st.dataframe(example_data)
+        st.markdown("*Tip: You can format any NST export to match these 5 column headers to instantly evaluate a full night's slate.*")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
@@ -152,7 +136,6 @@ with tab3:
     combined_parlay_dec = dec1 * dec2
     parlay_american = int((combined_parlay_dec - 1) * 100) if combined_parlay_dec >= 2 else int(-100 / (combined_parlay_dec - 1))
     
-    # Flexible boost number input for parlays too!
     boost_val = st.number_input("Apply Profit Boost to Parlay (%)", min_value=0, max_value=100, value=30, step=5)
     
     profit_frac = combined_parlay_dec - 1
