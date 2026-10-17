@@ -6,7 +6,6 @@ from datetime import date
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
-# Custom CSS for professional styling & eye candy
 st.markdown("""
     <style>
         .main { background-color: #0e1117; }
@@ -30,7 +29,7 @@ api_key_input = st.sidebar.text_input("Odds API Key", type="password", placehold
 available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
 selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet"])
 
-# Helper function for Poisson probability calculation
+# Helper functions for Poisson probability calculation
 def poisson_prob(lam, k):
     if lam <= 0:
         return 0.0
@@ -144,16 +143,57 @@ with tab1:
             elif api_market_choice in ["player_points", "player_assists", "player_goals"]:
                 master_df = master_df[master_df['Line'].isin([0.5])]
 
-        # Merge with Tab 2 model data if available in session state
-        if 'model_matrix_df' in st.session_state:
-            model_df = st.session_state['model_matrix_df'].copy()
-            model_df['Player'] = model_df['Player'].astype(str).str.strip()
+        # Merge with Tab 2 model data based on the selected market category
+        if 'raw_player_dfs' in st.session_state:
+            curr_df, prev_df, team_factors = st.session_state['raw_player_dfs']
             
-            # Perform exact inner join on player name
-            merged_scan = pd.merge(master_df, model_df[['Player', 'Matchup_Proj']], on='Player', how='inner')
+            if "shots" in api_market_choice:
+                target_col = 'Shots'
+            elif "points" in api_market_choice:
+                target_col = 'Total Points'
+            elif "goals" in api_market_choice:
+                target_col = 'Goals'
+            else:
+                target_col = 'Total Assists'
+
+            merged_model = pd.merge(curr_df, prev_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+            merged_model['Player'] = merged_model['Player'].astype(str).str.strip()
+            
+            merged_model['Stat_curr'] = pd.to_numeric(merged_model[f'{target_col}_curr'], errors='coerce').fillna(0)
+            merged_model['Stat_prev'] = pd.to_numeric(merged_model[f'{target_col}_prev'], errors='coerce').fillna(0)
+            
+            gp_prev = pd.to_numeric(merged_model.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
+            gp_curr = pd.to_numeric(merged_model.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
+            
+            merged_model['Baseline_Stat'] = merged_model['Stat_prev'] / gp_prev
+            merged_model['Current_Stat'] = merged_model['Stat_curr'] / gp_curr
+            
+            merged_model['Blended_Proj'] = (merged_model['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100))
+            
+            # Map clean team and matchup factor
+            nst_to_standard = {
+                'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ',
+                'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET',
+                'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL',
+                'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT',
+                'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL',
+                'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK',
+                'WPG': 'WPG', 'WSH': 'WSH'
+            }
+            def clean_team(t_str):
+                if pd.isna(t_str): return 'UNK'
+                t = str(t_str).split(',')[-1].strip()
+                return nst_to_standard.get(t, t)
+                
+            merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
+            merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
+            merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
+
+            # Now merge with live odds
+            merged_scan = pd.merge(master_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
             
             if len(merged_scan) == 0:
-                st.warning("⚠️ Player name mismatch between live odds and uploaded CSVs. Please check player name formatting.")
+                st.warning("⚠️ Player name mismatch between live odds and loaded CSVs.")
             else:
                 def calc_row_prob(row):
                     return poisson_over_prob(row['Matchup_Proj'], row['Line'])
@@ -199,7 +239,7 @@ with tab1:
                     height=500
                 )
         else:
-            st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can calculate model projections and +EV edges here!")
+            st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can correctly map stats for your selected market!")
             st.dataframe(master_df[['Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
     else:
         st.info("💡 **Instructions:** Select your target market above and click **Scan Slate & Calculate +EV** to pull live bookmaker props across all games.")
@@ -292,7 +332,6 @@ with tab2:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
                 sched_resp = requests.get(sched_url).json()
                 
-                team_stat_dict = {}
                 if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     
@@ -339,6 +378,9 @@ with tab2:
 
             prev_col = target_col
 
+            # Save raw dataframes to session state so Tab 1 can dynamically compute the correct market rate
+            st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
+
             merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
             merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
             
@@ -358,9 +400,6 @@ with tab2:
             merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
             merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
             merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
-
-            # Save model dataframe to session state so Tab 1 can access it
-            st.session_state['model_matrix_df'] = merged_df
 
             # Calculate Poisson Probabilities and Fair Odds
             merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
@@ -406,7 +445,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
