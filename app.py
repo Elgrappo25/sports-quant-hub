@@ -3,8 +3,8 @@ import pandas as pd
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Suite", page_icon="🏒", layout="wide")
 
-st.title("🏒 NHL Quant Terminal: SOG, Points & Boost Optimizer")
-st.markdown("### Evaluate standard lines, alternate markets, batch sheets, and profit-boost parlays.")
+st.title("🏒 NHL Quant Terminal: Smart Market Evaluator")
+st.markdown("### Dynamic market evaluation with automatic baseline adjustments and boost optimization.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -12,33 +12,53 @@ season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=
 global_boost = st.sidebar.selectbox("Active Sportsbook Profit Boost (%)", [0, 25, 30, 50], index=2)
 
 # Navigation Tabs
-tab1, tab2, tab3 = st.tabs(["📊 Prop & Alt-Line Evaluator", "📁 Batch CSV Data Sheet", "🚀 Boost & Parlay Optimizer"])
+tab1, tab2, tab3 = st.tabs(["📊 Smart Market Evaluator", "📁 Batch CSV Data Sheet", "🚀 Boost & Parlay Optimizer"])
 
 with tab1:
-    st.subheader("Single Player Prop & Alternate Line Evaluator")
+    st.subheader("Dynamic Prop & Alt-Line Evaluator")
     
     col1, col2, col3 = st.columns(3)
 
     with col1:
         player_name = st.text_input("Player Name", value="Auston Matthews")
-        market_type = st.selectbox("Market Type", ["Shots on Goal (SOG)", "Points (G+A)", "Anytime Goal Scorer"])
+        market_type = st.selectbox(
+            "Market Type", 
+            ["Shots on Goal (SOG)", "Points (G+A)", "Anytime Goal Scorer"]
+        )
+
+    # Automatically set smart defaults based on selected market type
+    if market_type == "Shots on Goal (SOG)":
+        default_base = 3.85
+        default_curr = 4.20
+        default_line = 3.5
+        default_odds = -120
+    elif market_type == "Points (G+A)":
+        default_base = 1.15
+        default_curr = 1.30
+        default_line = 1.5
+        default_odds = +115
+    else:  # Anytime Goal Scorer
+        default_base = 0.65
+        default_curr = 0.75
+        default_line = 0.5
+        default_odds = +135
 
     with col2:
-        baseline_stat = st.number_input("Multi-Year Baseline / Game", value=3.85, step=0.05)
-        current_stat = st.number_input("Current Season Stat / Game", value=4.20, step=0.05)
+        baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
+        current_stat = st.number_input("Current Season Stat / Game", value=default_curr, step=0.05)
 
     with col3:
-        sportsbook_line = st.number_input("Sportsbook Line (Standard or Alt)", value=3.5, step=0.5)
-        sportsbook_odds = st.number_input("Sportsbook Odds (American)", value=+110, step=5)
+        sportsbook_line = st.number_input("Sportsbook Line (Standard or Alt)", value=default_line, step=0.5)
+        sportsbook_odds = st.number_input("Sportsbook Odds (American)", value=default_odds, step=5)
 
     # Blended Projection Calculation
     blended_projection = (baseline_stat * (1 - (season_weight / 100))) + (current_stat * (season_weight / 100))
 
-    st.markdown("### 📈 Model Output & Pricing")
+    st.markdown(f"### 📈 Model Output: {market_type}")
 
     col_a, col_b, col_c = st.columns(3)
 
-    col_a.metric(label=f"Blended Expected {market_type.split()[0]}", value=f"{blended_projection:.2f}")
+    col_a.metric(label=f"Blended Expected Value", value=f"{blended_projection:.2f}")
 
     # Convert American odds to decimal
     if sportsbook_odds > 0:
@@ -62,9 +82,9 @@ with tab1:
     edge_spread = blended_projection - sportsbook_line
     col_c.metric(label="Line Diff vs Projection", value=f"{edge_spread:+.2f}")
 
-    if edge_spread > 0.3:
-        st.success(f"✅ **Strong Over / Alt Play:** {player_name} projects for {blended_projection:.2f} against the {sportsbook_line} line.")
-    elif edge_spread < -0.3:
+    if edge_spread > 0.25:
+        st.success(f"✅ **Strong Over / Alt Play:** {player_name} projects for {blended_projection:.2f} in **{market_type}** against the {sportsbook_line} line.")
+    elif edge_spread < -0.25:
         st.warning(f"⚠️ **Under / Pass:** Projection ({blended_projection:.2f}) does not clear safety margin.")
     else:
         st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
@@ -91,10 +111,10 @@ with tab2:
         st.write("### 🔎 Example CSV Format Preview:")
         example_data = pd.DataFrame({
             'Player': ['Auston Matthews', 'Connor McDavid', 'Nathan MacKinnon', 'David Pastrnak'],
-            'Baseline_Stat': [3.85, 4.10, 4.25, 3.90],
-            'Current_Stat': [4.20, 4.40, 4.50, 4.10],
-            'Line': [4.5, 4.5, 5.5, 4.5],
-            'Odds': [+135, +125, +160, +140]
+            'Baseline_Stat': [3.85, 1.15, 0.65, 3.90],
+            'Current_Stat': [4.20, 1.30, 0.75, 4.10],
+            'Line': [4.5, 1.5, 0.5, 4.5],
+            'Odds': [+135, +115, +135, +140]
         })
         st.dataframe(example_data)
 
@@ -110,14 +130,12 @@ with tab3:
         leg2_name = st.text_input("Leg 2 Player / Prop", value="McDavid Over 1.5 Points")
         leg2_odds = st.number_input("Leg 2 American Odds", value=+100, step=5)
         
-    # Convert leg odds to decimal
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
     dec2 = 1 + (leg2_odds / 100) if leg2_odds > 0 else 1 + (100 / abs(leg2_odds))
     
     combined_parlay_dec = dec1 * dec2
     parlay_american = int((combined_parlay_dec - 1) * 100) if combined_parlay_dec >= 2 else int(-100 / (combined_parlay_dec - 1))
     
-    # Apply boost to parlay
     boost_val = st.selectbox("Apply Profit Boost to Parlay", [25, 30, 50], index=1)
     profit_frac = combined_parlay_dec - 1
     boosted_parlay_dec = 1 + (profit_frac * (1 + (boost_val / 100)))
