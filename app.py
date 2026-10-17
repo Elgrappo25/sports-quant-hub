@@ -232,4 +232,6 @@ with tab2:
                 'WPG': 'WPG', 'WSH': 'WSH'
             }
             full_to_standard = {
-                'Anaheim Ducks': 'ANA
+                'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF',
+                'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY',
+                'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars
