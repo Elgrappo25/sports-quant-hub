@@ -1,18 +1,25 @@
 import streamlit as st
 import pandas as pd
+import requests
+from datetime import date
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
-st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Live multi-market evaluation, NST batch sheet processing, and boost-optimized parlay calculations.")
+st.title("🏒 NHL Quant Terminal: Complete Production Suite")
+st.markdown("### Live multi-market evaluation, NST batch sheet processing, boost optimization, and live schedule tracking.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
-# Navigation Tabs
-tab1, tab2, tab3 = st.tabs(["📊 Smart Market Evaluator", "📁 NST Batch CSV Uploader", "🚀 Boost & Parlay Optimizer"])
+# Navigation Tabs (Added Live Schedule Tab!)
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Smart Market Evaluator", 
+    "📁 NST Batch CSV Uploader", 
+    "🚀 Boost & Parlay Optimizer",
+    "📅 Live NHL Schedule & Matchups"
+])
 
 with tab1:
     st.subheader("Dynamic Prop & Alt-Line Evaluator")
@@ -92,7 +99,6 @@ with tab2:
     st.subheader("Natural Stat Trick Batch Data Sheet Processor")
     st.write("Select the target market for your batch sheet, then upload your CSV to compute edges.")
     
-    # Batch market selector dropdown so you always know what market the sheet is for!
     batch_market = st.selectbox(
         "Select Market Type for This Batch Sheet", 
         [
@@ -118,7 +124,6 @@ with tab2:
             df['Blended_Proj'] = (df['Baseline_Stat'] * (1 - (season_weight / 100))) + (df['Current_Stat'] * (season_weight / 100))
             df['Edge'] = df['Blended_Proj'] - df['Line']
             st.write(f"### 📈 Processed Model Edges for {batch_market} (Sorted High to Low):")
-            # Reorder columns to show Market clearly
             cols_to_show = ['Player', 'Market', 'Baseline_Stat', 'Current_Stat', 'Line', 'Odds', 'Blended_Proj', 'Edge']
             st.dataframe(df[cols_to_show].sort_values(by='Edge', ascending=False))
         except Exception as e:
@@ -133,7 +138,6 @@ with tab2:
             'Odds': [-110, +130, -105, +170]
         })
         st.dataframe(example_data)
-        st.markdown(f"*Tip: Your current batch sheet will be evaluated under the market: **{batch_market}**.*")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
@@ -165,3 +169,36 @@ with tab3:
     col_res2.metric(label=f"Boosted Parlay Odds (+{boost_val}%)", value=f"{boosted_parlay_american:+d}")
     
     st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost yields **{boosted_parlay_american:+d}** odds!")
+
+with tab4:
+    st.subheader("📅 Live NHL Game Schedule & Matchups")
+    st.write("Automatically pull today's scheduled games and team matchups straight from the official NHL data feed.")
+    
+    selected_date = st.date_input("Select Date", value=date.today())
+    
+    if st.button("Fetch Live Schedule"):
+        try:
+            url = f"https://api-web.nhle.com/v1/schedule/{selected_date.strftime('%Y-%m-%d')}"
+            response = requests.get(url)
+            data = response.json()
+            
+            games_found = False
+            for week_day in data.get("gameWeek", []):
+                if week_day.get("date") == selected_date.strftime('%Y-%m-%d'):
+                    games = week_day.get("games", [])
+                    if games:
+                        games_found = True
+                        st.success(f"Successfully loaded {len(games)} games for {selected_date}!")
+                        for idx, game in enumerate(games, 1):
+                            away_team = game.get("awayTeam", {}).get("commonName", {}).get("default", "Away")
+                            home_team = game.get("homeTeam", {}).get("commonName", {}).get("default", "Home")
+                            game_state = game.get("gameState", "FUT")
+                            st.markdown(f"**Game {idx}:** {away_team} @ {home_team} *(Status: {game_state})*")
+                    else:
+                        st.warning(f"No games found for {selected_date}.")
+            if not games_found:
+                st.info("No game schedule data returned for this date.")
+        except Exception as e:
+            st.error(f"Could not fetch live schedule data: {e}")
+    else:
+        st.markdown("*Click the button above to fetch today's live NHL matchups.*")
