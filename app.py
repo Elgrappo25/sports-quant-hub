@@ -7,7 +7,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and market-tailored color coding.")
+st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
 
 # Sidebar for global settings & Live Odds configuration
 st.sidebar.header("⚙️ Global Model Settings")
@@ -18,7 +18,7 @@ global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min
 st.sidebar.divider()
 st.sidebar.header("🔌 Live Odds & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
-available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "thescore", "pinnacle"]
+available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "pinnacle"]
 selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm"])
 
 # Helper function for Poisson probability calculation
@@ -46,15 +46,28 @@ def prob_to_american(p):
 
 # Navigation Tabs
 tab1, tab2, tab3 = st.tabs([
-    "📊 Smart Market & Alt-Line Evaluator", 
-    "📁 Multi-File NST Uploader & Live +EV Matcher", 
+    "📊 Live +EV Market Scanner & Valuator", 
+    "📁 Multi-File NST Uploader & Market Matrix", 
     "🚀 Boost & Parlay Optimizer"
 ])
 
 with tab1:
-    st.subheader("Dynamic Prop & Alt-Line Poisson Valuator")
-    st.write("Calculate model-derived fair odds and probabilities for any custom alt line using Poisson distribution math.")
+    st.subheader("Live Odds API & Poisson Prop Valuator")
+    st.write("Scan live sportsbook odds via API or test custom alt-line projections on the fly.")
     
+    live_feed_data = None
+    if api_key_input:
+        try:
+            odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us&markets=h2h"
+            resp = requests.get(odds_url, timeout=5)
+            if resp.status_code == 200:
+                live_feed_data = resp.json()
+                st.sidebar.success(f"🟢 Odds API Connected ({len(live_feed_data)} games live)")
+            else:
+                st.sidebar.warning(f"⚠️ API Error: Status {resp.status_code}")
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ API Connection Failed: {e}")
+
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -108,7 +121,7 @@ with tab1:
     col_d.metric(label="Model vs Book Edge", value=f"{edge_percentage:+.1f}%")
 
     if edge_percentage > 3.0:
-        st.success(f"✅ **Strong +EV Alt Play:** Model probability ({over_prob*100:.1f}%) significantly outpaces book implied probability ({implied_book_prob*100:.1f}%).")
+        st.success(f"✅ **Strong +EV Play Found:** Model probability ({over_prob*100:.1f}%) significantly outpaces book implied probability ({implied_book_prob*100:.1f}%).")
     elif edge_percentage < -3.0:
         st.warning(f"⚠️ **Negative EV / Pass:** Book price is too sharp compared to model expectation.")
     else:
@@ -288,7 +301,6 @@ with tab2:
             
             final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
 
-            # MARKET-TAILORED COLOR CODING THRESHOLDS
             def color_matrix_cells(val, col_name):
                 if isinstance(val, (int, float)):
                     if col_name == 'Matchup_Factor':
@@ -297,14 +309,13 @@ with tab2:
                         elif val < 0.95:
                             return 'color: #FF5252; font-weight: bold;'
                     elif col_name == 'Model_Over_Prob_%':
-                        # Tailor green/red thresholds based on specific market type
                         if batch_market == "Anytime Goal Scorer":
                             green_thresh, red_thresh = 42.0, 32.0
                         elif batch_market == "Points (G+A)":
                             green_thresh, red_thresh = (72.0 if target_line_choice <= 0.5 else 45.0), 50.0
                         elif batch_market == "Assists Only":
                             green_thresh, red_thresh = (65.0 if target_line_choice <= 0.5 else 40.0), 45.0
-                        else:  # Shots on Goal
+                        else:
                             green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
                             
                         if val >= green_thresh:
@@ -333,8 +344,7 @@ with tab3:
         leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists")
         leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5)
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over > 0.5 Points", key="t3_l2")
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points", key="t3_l2_fix")
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points")
         leg2_odds = st.number_input("Leg 2 American Odds", value=+130, step=5)
         
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
@@ -354,4 +364,4 @@ with tab3:
     col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
     col_res2.metric(label=f"Boosted Parlay Odds (+{boost_val}%)", value=f"{boosted_parlay_american:+d}")
     
-    st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost yields **{boosted_parlay_american:+d}** odds!")
+    st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost
