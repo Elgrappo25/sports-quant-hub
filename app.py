@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Multi-market evaluation, multi-season NST data merging, team matchup context, and boost optimization.")
+st.markdown("### Multi-market evaluation, schedule-filtered slate matching, and multi-season NST processing.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -40,15 +40,15 @@ with tab1:
         )
 
     if market_type == "Shots on Goal (SOG)":
-        default_base, default_curr, default_line, default_odds = 3.85, 4.20, 3.5, -120
+        default_base, default_curr, default_line, default_odds = 3.35, 3.60, 3.5, -120
     elif market_type == "Points (G+A)":
         default_base, default_curr, default_line, default_odds = 1.15, 1.30, 1.5, +115
     elif market_type == "Anytime Goal Scorer":
-        default_base, default_curr, default_line, default_odds = 0.65, 0.75, 0.5, +135
+        default_base, default_curr, default_line, default_odds = 0.55, 0.65, 0.5, +135
     elif market_type == "Assists Only":
-        default_base, default_curr, default_line, default_odds = 0.80, 0.90, 0.5, -110
+        default_base, default_curr, default_line, default_odds = 0.70, 0.80, 0.5, -110
     else:  # Power-Play Points (PPP)
-        default_base, default_curr, default_line, default_odds = 0.45, 0.55, 0.5, +140
+        default_base, default_curr, default_line, default_odds = 0.35, 0.45, 0.5, +140
 
     with col2:
         baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
@@ -93,8 +93,8 @@ with tab1:
         st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
 
 with tab2:
-    st.subheader("Single Dropzone: Multi-File NST Processor")
-    st.write("Drop all your Natural Stat Trick CSV files (Player Season Totals & Team Games for current and previous seasons) into the box below simultaneously.")
+    st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
+    st.write("Drop your 4 Natural Stat Trick files below. The model will automatically pull today's schedule from the NHL API and filter projections **only for teams playing today**.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -108,6 +108,8 @@ with tab2:
         key="multi_batch_market"
     )
     
+    target_date = st.date_input("Target Slate Date", value=date.today(), key="batch_target_date")
+    
     uploaded_files = st.file_uploader(
         "Drop all 4 Natural Stat Trick CSV files here", 
         type="csv", 
@@ -116,8 +118,6 @@ with tab2:
     )
     
     if uploaded_files:
-        st.write(f"📁 **Received {len(uploaded_files)} files. Processing...**")
-        
         curr_player_df, prev_player_df, curr_team_df, prev_team_df = None, None, None, None
         
         for file in uploaded_files:
@@ -131,14 +131,23 @@ with tab2:
             elif "games" in fname:
                 prev_team_df = pd.read_csv(file)
                 
-        # Status checks
-        col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-        col_s1.metric("Current Players", "Loaded" if curr_player_df is not None else "Missing")
-        col_s2.metric("Previous Players", "Loaded" if prev_player_df is not None else "Missing")
-        col_s3.metric("Current Teams", "Loaded" if curr_team_df is not None else "Missing")
-        col_s4.metric("Previous Teams", "Loaded" if prev_team_df is not None else "Missing")
-        
         if curr_player_df is not None and prev_player_df is not None:
+            # 1. Fetch live schedule teams for target date
+            active_teams = set()
+            try:
+                sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
+                sched_resp = requests.get(sched_url).json()
+                for week_day in sched_resp.get("gameWeek", []):
+                    if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
+                        for game in week_day.get("games", []):
+                            # Grab 3-letter abbreviations if available, or common names
+                            away_abbrev = game.get("awayTeam", {}).get("abbrev")
+                            home_abbrev = game.get("homeTeam", {}).get("abbrev")
+                            if away_abbrev: active_teams.add(away_abbrev)
+                            if home_abbrev: active_teams.add(home_abbrev)
+            except Exception as e:
+                st.warning(f"Could not auto-fetch schedule teams ({e}). Showing all players.")
+
             stat_map = {
                 "Shots on Goal (SOG)": "Shots/60",
                 "Points (G+A)": "Total Points/60",
@@ -151,24 +160,34 @@ with tab2:
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
-                # Correct per-game conversion using TOI/GP divided by 60
+                # Correct per-game scaling: Rate / 60 * TOI/GP
                 toi_prev = merged_df.get('TOI/GP_prev', 18.0)
                 toi_curr = merged_df.get('TOI/GP_curr', 18.0)
                 
-                merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] * (toi_prev / 60.0)
-                merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] * (toi_curr / 60.0)
+                merged_df['Baseline_Stat'] = (merged_df[f'{target_col}_prev'] / 60.0) * toi_prev
+                merged_df['Current_Stat'] = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                st.success(f"Successfully processed realistic per-game projections for **{batch_market}** across {len(merged_df)} players!")
-                st.write("### 📈 Top Projections Board (Per-Game Output):")
-                display_cols = ['Player', 'Team_curr', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
-                st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True).head(25))
+                # Filter by active teams if schedule was retrieved successfully
+                team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else 'Team'
+                if active_teams and team_col in merged_df.columns:
+                    # NST sometimes uses 3-letter codes like EDM, TOR. Let's filter:
+                    filtered_df = merged_df[merged_df[team_col].isin(active_teams)].copy()
+                    if len(filtered_df) > 0:
+                        merged_df = filtered_df
+                        st.success(f"📅 **Schedule Filter Active:** Filtered down to **{len(merged_df)} players** playing on {target_date} across {len(active_teams)} teams!")
+                    else:
+                        st.info("ℹ️ Team abbreviation match found 0 exact strings. Showing full player pool with schedule tags.")
+                
+                st.write(f"### 📈 Slate Projections Board ({batch_market}):")
+                display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
+                st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True).head(50))
             else:
                 st.error(f"Could not find column '{target_col}' in player files.")
         else:
-            st.warning("Please ensure you include both your Current Season and Previous Season Player Season Total CSV files in your upload.")
+            st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drag and drop all 4 of your Natural Stat Trick files at once into the dropzone above.")
+        st.info("💡 **Instructions:** Drag and drop all 4 files above to generate tonight's slate projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
@@ -205,7 +224,7 @@ with tab4:
     st.subheader("📅 Live NHL Game Schedule & Matchups")
     st.write("Automatically pull today's scheduled games and team matchups straight from the official NHL data feed.")
     
-    selected_date = st.date_input("Select Date", value=date.today())
+    selected_date = st.date_input("Select Date", value=date.today(), key="sched_tab_date")
     
     if st.button("Fetch Live Schedule"):
         try:
