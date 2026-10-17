@@ -13,16 +13,16 @@ st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
-# Navigation Tabs
-tab1, tab2, tab3, tab4 = st.tabs([
+# Navigation Tabs (Streamlined to 3 Tabs)
+tab1, tab2, tab3 = st.tabs([
     "📊 Smart Market Evaluator", 
-    "📁 Multi-File NST Uploader", 
-    "🚀 Boost & Parlay Optimizer",
-    "📅 Live NHL Schedule & Matchups"
+    "📁 Multi-File NST Uploader & Slate Matcher", 
+    "🚀 Boost & Parlay Optimizer"
 ])
 
 with tab1:
-    st.subheader("Dynamic Prop & Alt-Line Evaluator")
+    st.subheader("Dynamic Prop & Alt-Line Evaluator (Quick Scratchpad)")
+    st.write("Use this tab for fast, manual on-the-fly calculations for any single prop or alternate line.")
     
     col1, col2, col3 = st.columns(3)
 
@@ -94,7 +94,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick files below. The model will automatically pull today's schedule from the NHL API and filter projections **only for teams playing today**.")
+    st.write("Drop your 4 Natural Stat Trick files below. The model automatically pulls today's schedule from the NHL API and filters projections **only for teams playing today**.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -132,7 +132,7 @@ with tab2:
                 prev_team_df = pd.read_csv(file)
                 
         if curr_player_df is not None and prev_player_df is not None:
-            # 1. Fetch live schedule teams for target date
+            # Fetch live schedule teams for target date
             active_teams = set()
             try:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
@@ -140,7 +140,6 @@ with tab2:
                 for week_day in sched_resp.get("gameWeek", []):
                     if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
                         for game in week_day.get("games", []):
-                            # Grab 3-letter abbreviations if available, or common names
                             away_abbrev = game.get("awayTeam", {}).get("abbrev")
                             home_abbrev = game.get("homeTeam", {}).get("abbrev")
                             if away_abbrev: active_teams.add(away_abbrev)
@@ -160,7 +159,7 @@ with tab2:
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
-                # Correct per-game scaling: Rate / 60 * TOI/GP
+                # Correct per-game scaling: Rate / 60.0 * TOI/GP
                 toi_prev = merged_df.get('TOI/GP_prev', 18.0)
                 toi_curr = merged_df.get('TOI/GP_curr', 18.0)
                 
@@ -168,16 +167,14 @@ with tab2:
                 merged_df['Current_Stat'] = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                # Filter by active teams if schedule was retrieved successfully
                 team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else 'Team'
                 if active_teams and team_col in merged_df.columns:
-                    # NST sometimes uses 3-letter codes like EDM, TOR. Let's filter:
                     filtered_df = merged_df[merged_df[team_col].isin(active_teams)].copy()
                     if len(filtered_df) > 0:
                         merged_df = filtered_df
                         st.success(f"📅 **Schedule Filter Active:** Filtered down to **{len(merged_df)} players** playing on {target_date} across {len(active_teams)} teams!")
                     else:
-                        st.info("ℹ️ Team abbreviation match found 0 exact strings. Showing full player pool with schedule tags.")
+                        st.info("ℹ️ Team abbreviation match found 0 exact strings. Showing full player pool.")
                 
                 st.write(f"### 📈 Slate Projections Board ({batch_market}):")
                 display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
@@ -219,36 +216,3 @@ with tab3:
     col_res2.metric(label=f"Boosted Parlay Odds (+{boost_val}%)", value=f"{boosted_parlay_american:+d}")
     
     st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost yields **{boosted_parlay_american:+d}** odds!")
-
-with tab4:
-    st.subheader("📅 Live NHL Game Schedule & Matchups")
-    st.write("Automatically pull today's scheduled games and team matchups straight from the official NHL data feed.")
-    
-    selected_date = st.date_input("Select Date", value=date.today(), key="sched_tab_date")
-    
-    if st.button("Fetch Live Schedule"):
-        try:
-            url = f"https://api-web.nhle.com/v1/schedule/{selected_date.strftime('%Y-%m-%d')}"
-            response = requests.get(url)
-            data = response.json()
-            
-            games_found = False
-            for week_day in data.get("gameWeek", []):
-                if week_day.get("date") == selected_date.strftime('%Y-%m-%d'):
-                    games = week_day.get("games", [])
-                    if games:
-                        games_found = True
-                        st.success(f"Successfully loaded {len(games)} games for {selected_date}!")
-                        for idx, game in enumerate(games, 1):
-                            away_team = game.get("awayTeam", {}).get("commonName", {}).get("default", "Away")
-                            home_team = game.get("homeTeam", {}).get("commonName", {}).get("default", "Home")
-                            game_state = game.get("gameState", "FUT")
-                            st.markdown(f"**Game {idx}:** {away_team} @ {home_team} *(Status: {game_state})*")
-                    else:
-                        st.warning(f"No games found for {selected_date}.")
-            if not games_found:
-                st.info("No game schedule data returned for this date.")
-        except Exception as e:
-            st.error(f"Could not fetch live schedule data: {e}")
-    else:
-        st.markdown("*Click the button above to fetch today's live NHL matchups.*")
