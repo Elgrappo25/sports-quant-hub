@@ -18,8 +18,8 @@ global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min
 st.sidebar.divider()
 st.sidebar.header("🔌 Live Odds & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
-available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "thescore", "bet365", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "thescore", "bet365"])
+available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet", "bet365"])
 
 # Helper function for Poisson probability calculation
 def poisson_prob(lam, k):
@@ -75,7 +75,7 @@ with tab1:
         else:
             try:
                 books_str = ",".join(selected_books)
-                odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us&markets=h2h&bookmakers={books_str}"
+                odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us,us2&markets=h2h&bookmakers={books_str}"
                 resp = requests.get(odds_url, timeout=5)
                 if resp.status_code == 200:
                     live_games = resp.json()
@@ -389,7 +389,7 @@ with tab3:
         leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists", key="t3_l1_name")
         leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5, key="t3_l1_odds")
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points", key="t3_l2_name")
+        leg2_name = st.text_input("Leg 2 Player / Regions", value="Draisaitl Over 0.5 Points", key="t3_l2_name")
         leg2_odds = st.number_input("Leg 2 American Odds", value=130, step=5, key="t3_l2_odds")
         
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
