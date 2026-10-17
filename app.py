@@ -228,7 +228,7 @@ with tab2:
                 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL',
                 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT',
                 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL',
-                'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK',
+                'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'UTAH': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK',
                 'WPG': 'WPG', 'WSH': 'WSH'
             }
             full_to_standard = {
@@ -241,7 +241,7 @@ with tab2:
                 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI',
                 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
                 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
-                'Utah Hockey Club': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK',
+                'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK',
                 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
             }
 
@@ -400,8 +400,8 @@ with tab3:
     
     boost_val = st.number_input("Apply Profit Boost to Parlay (%)", min_value=0, max_value=100, value=30, step=5, key="t3_boost")
     
-    profit_frac = combined_parlay_dec - 1
-    boosted_parlay_dec = 1 + (profit_frac * (1 + (boost_val / 100)))
+    profit_factor = combined_parlay_dec - 1
+    boosted_parlay_dec = 1 + (profit_factor * (1 + (boost_val / 100)))
     boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
     
     st.divider()
