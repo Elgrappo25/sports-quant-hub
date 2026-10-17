@@ -7,7 +7,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and color-coded edge detection.")
+st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and dynamic color-coded edge detection.")
 
 # Sidebar for global settings & Live Odds configuration
 st.sidebar.header("⚙️ Global Model Settings")
@@ -115,8 +115,8 @@ with tab1:
         st.info("ℹ️ **Fairly Priced:** Market odds are closely aligned with Poisson model probability.")
 
 with tab2:
-    st.subheader("Single Dropzone: Multi-File NST Processor & Color-Coded Alt-Line Matrix")
-    st.write("Drop your 4 Natural Stat Trick count files below. Matchup factors and probabilities are color-coded for fast scanning.")
+    st.subheader("Single Dropzone: Multi-File NST Processor & Dynamic Alt-Line Matrix")
+    st.write("Drop your 4 Natural Stat Trick count files below. Color coding adapts dynamically to your chosen target threshold line.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -183,8 +183,8 @@ with tab2:
                 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI',
                 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
                 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
-                'Utah Mammoth': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK',
-                'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
+                'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Vancouver Canucks': 'VAN', 
+                'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
             }
 
             def clean_team(team_str):
@@ -288,16 +288,33 @@ with tab2:
             
             final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
 
-            def color_matrix_cells(val):
+            # DYNAMIC COLOR-CODING BASED ON THRESHOLD LINE
+            def color_matrix_cells(val, col_name):
                 if isinstance(val, (int, float)):
-                    if val > 1.05 or val > 55.0:
-                        return 'color: #00E676; font-weight: bold;'
-                    elif val < 0.95 or val < 35.0:
-                        return 'color: #FF5252; font-weight: bold;'
+                    if col_name == 'Matchup_Factor':
+                        if val > 1.05:
+                            return 'color: #00E676; font-weight: bold;'
+                        elif val < 0.95:
+                            return 'color: #FF5252; font-weight: bold;'
+                    elif col_name == 'Model_Over_Prob_%':
+                        # Dynamic thresholds based on target line
+                        if target_line_choice <= 0.5:
+                            green_thresh, red_thresh = 75.0, 50.0
+                        elif target_line_choice <= 1.5:
+                            green_thresh, red_thresh = 55.0, 30.0
+                        else:
+                            green_thresh, red_thresh = 40.0, 20.0
+                            
+                        if val >= green_thresh:
+                            return 'color: #00E676; font-weight: bold;'
+                        elif val <= red_thresh:
+                            return 'color: #FF5252; font-weight: bold;'
                 return 'color: #CFD8DC;'
 
+            # Apply styling column by column safely
             st.dataframe(
-                final_board.style.map(color_matrix_cells, subset=['Matchup_Factor', 'Model_Over_Prob_%']),
+                final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
