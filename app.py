@@ -4,12 +4,12 @@ import pandas as pd
 st.set_page_config(page_title="Sports Quant Hub - NHL Suite", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Pro Market Suite")
-st.markdown("### Multi-market evaluation including SOG, Goals, Points, Assists, Power-Play Points, and Expanded Boost Optimization.")
+st.markdown("### Multi-market evaluation including SOG, Goals, Points, Assists, Power-Play Points, and Flexible Boost Optimization.")
 
-# Sidebar for global settings (Expanded Boost Tiers added!)
+# Sidebar for global settings (Now using a custom number input from 0 to 100%)
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
-global_boost = st.sidebar.selectbox("Active Sportsbook Profit Boost (%)", [0, 25, 30, 40, 50, 70, 100], index=2)
+global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 # Navigation Tabs
 tab1, tab2, tab3 = st.tabs(["📊 Smart Market Evaluator", "📁 Batch CSV Data Sheet", "🚀 Boost & Parlay Optimizer"])
@@ -152,7 +152,9 @@ with tab3:
     combined_parlay_dec = dec1 * dec2
     parlay_american = int((combined_parlay_dec - 1) * 100) if combined_parlay_dec >= 2 else int(-100 / (combined_parlay_dec - 1))
     
-    boost_val = st.selectbox("Apply Profit Boost to Parlay", [25, 30, 40, 50, 70, 100], index=3)
+    # Flexible boost number input for parlays too!
+    boost_val = st.number_input("Apply Profit Boost to Parlay (%)", min_value=0, max_value=100, value=30, step=5)
+    
     profit_frac = combined_parlay_dec - 1
     boosted_parlay_dec = 1 + (profit_frac * (1 + (boost_val / 100)))
     boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
