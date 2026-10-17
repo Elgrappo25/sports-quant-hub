@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, market-tailored matchup factors, and opponent game tags.")
+st.markdown("### Count-based scaling, robust market matchup factors, and opponent game tags.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections include **opponent tags** and market-tailored factors.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections include **robust fallback matchup factors** and opponent tags.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -169,7 +169,7 @@ with tab2:
 
             active_teams = set()
             team_matchup_factors = {}
-            team_opponents = {} # maps team abbrev to their opponent's abbrev for tonight
+            team_opponents = {}
             
             try:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
@@ -179,14 +179,17 @@ with tab2:
                 if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     
+                    # Intelligent column selection with guaranteed fallbacks
                     if batch_market == "Shots on Goal (SOG)":
-                        stat_col = 'CA' if 'CA' in curr_team_df.columns else 'FA'
+                        candidates = ['CA', 'FA', 'SA', 'SF']
                     elif batch_market in ["Anytime Goal Scorer"]:
-                        stat_col = 'HDCF' if 'HDCF' in curr_team_df.columns else 'CA'
+                        candidates = ['HDCF', 'HDCA', 'CA', 'FA']
                     elif batch_market == "Power-Play Points (PPP)":
-                        stat_col = 'Minor' if 'Minor' in curr_team_df.columns else 'Total Penalties'
+                        candidates = ['GF', 'GA', 'CA', 'FA'] # fallback to team goals/Corsi if penalty cols vary
                     else:
-                        stat_col = 'SCF' if 'SCF' in curr_team_df.columns else 'CA'
+                        candidates = ['SCF', 'SCA', 'CA', 'FA']
+                        
+                    stat_col = next((c for c in candidates if c in curr_team_df.columns), 'CA')
                         
                     mean_val = curr_team_df[stat_col].mean() if stat_col in curr_team_df.columns else 1.0
                     for _, row in curr_team_df.iterrows():
@@ -205,8 +208,8 @@ with tab2:
                             if home_abbrev: active_teams.add(home_abbrev)
                             
                             if away_abbrev and home_abbrev:
-                                team_opponents[away_abbrev] = f"@{home_abbrev}" # away team plays @ home team
-                                team_opponents[home_abbrev] = f"vs {away_abbrev}" # home team plays vs away team
+                                team_opponents[away_abbrev] = f"@{home_abbrev}"
+                                team_opponents[home_abbrev] = f"vs {away_abbrev}"
                                 
                                 away_factor = team_stat_dict.get(home_abbrev, 1.0)
                                 home_factor = team_stat_dict.get(away_abbrev, 1.0)
