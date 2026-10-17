@@ -9,14 +9,14 @@ st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="
 st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
 
-# Sidebar for global settings & Live Odds configuration
+# Sidebar for global settings & Live Props configuration
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
 min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 st.sidebar.divider()
-st.sidebar.header("🔌 Live Odds & Line Shopping")
+st.sidebar.header("🔌 Live Props & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
 available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
 selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet"])
@@ -56,17 +56,30 @@ def decimal_to_american(dec):
 
 # Navigation Tabs
 tab1, tab2, tab3 = st.tabs([
-    "📊 Live +EV Market Scanner & Valuator", 
+    "📊 Live Player Prop Scanner & Valuator", 
     "📁 Multi-File NST Uploader & Market Matrix", 
     "🚀 Boost & Parlay Optimizer"
 ])
 
 with tab1:
-    st.subheader("Live +EV Prop Scanner & API Valuator")
-    st.write("Scan live game moneylines or fetch player prop markets to compare against your Poisson model.")
+    st.subheader("Live Player Prop Line-Shopper & +EV Valuator")
+    st.write("Select a prop market and fetch live lines across sportsbooks for today's slate.")
     
-    col_fetch1, col_fetch2 = st.columns([1, 3])
-    fetch_clicked = col_fetch1.button("🔄 Fetch Live Odds & Props")
+    col_m1, col_m2 = st.columns([2, 2])
+    api_market_choice = col_m1.selectbox(
+        "Select API Prop Market to Fetch",
+        [
+            "player_shots_on_goal", 
+            "player_points", 
+            "player_goals", 
+            "player_assists",
+            "player_shots_on_goal_alternate",
+            "player_points_alternate"
+        ],
+        format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
+    )
+    
+    fetch_clicked = col_m2.button("🔄 Fetch Live Prop Lines")
     
     live_games = []
     if fetch_clicked:
@@ -75,68 +88,46 @@ with tab1:
         else:
             try:
                 books_str = ",".join(selected_books)
-                odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us,us2&markets=h2h,player_shots_on_goal,player_points,player_goals&bookmakers={books_str}"
-                resp = requests.get(odds_url, timeout=8)
+                props_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
+                resp = requests.get(props_url, timeout=10)
                 if resp.status_code == 200:
                     live_games = resp.json()
                     st.session_state['live_games'] = live_games
-                    st.success(f"🟢 Successfully pulled live odds & props! ({len(live_games)} games found)")
+                    st.success(f"🟢 Successfully pulled live props! ({len(live_games)} games found)")
                 else:
-                    st.warning(f"⚠️ API Error: Status {resp.status_code} - Check API quota or market availability.")
+                    st.warning(f"⚠️ API Error: Status {resp.status_code} - Market may not be posted by books yet.")
             except Exception as e:
                 st.warning(f"⚠️ Connection Failed: {e}")
     elif 'live_games' in st.session_state:
         live_games = st.session_state['live_games']
 
     if live_games:
-        st.write("### 🏟️ Live Game Line Shopping:")
+        st.write("### 🏒 Live Player Prop Board:")
         game_options = [f"{g['away_team']} @ {g['home_team']} ({g['commence_time'][:10]})" for g in live_games]
-        selected_game_label = st.selectbox("Select Live Game to Inspect", game_options, key="tab1_game_select")
+        selected_game_label = st.selectbox("Select Game to View Props", game_options, key="tab1_prop_game")
         
         selected_game_obj = live_games[game_options.index(selected_game_label)]
         
-        # Display Moneyline Table
-        st.write(f"**Moneyline Lines for {selected_game_label}:**")
-        book_rows = []
-        for bookmaker in selected_game_obj.get('bookmakers', []):
-            b_title = bookmaker['title']
-            for market in bookmaker.get('markets', []):
-                if market['key'] == 'h2h':
-                    outcomes = market['outcomes']
-                    away_dec = next((o['price'] for o in outcomes if o['name'] == selected_game_obj['away_team']), None)
-                    home_dec = next((o['price'] for o in outcomes if o['name'] == selected_game_obj['home_team']), None)
-                    book_rows.append({
-                        "Sportsbook": b_title,
-                        f"Away ({selected_game_obj['away_team']})": decimal_to_american(away_dec),
-                        f"Home ({selected_game_obj['home_team']})": decimal_to_american(home_dec)
-                    })
-        if book_rows:
-            st.dataframe(pd.DataFrame(book_rows), use_container_width=True)
-            
-        # Extract Player Props if available
         prop_rows = []
         for bookmaker in selected_game_obj.get('bookmakers', []):
             b_title = bookmaker['title']
             for market in bookmaker.get('markets', []):
-                m_key = market['key']
-                if m_key in ['player_shots_on_goal', 'player_points', 'player_goals']:
-                    for outcome in market.get('outcomes', []):
-                        if outcome.get('name') == 'Over':
-                            prop_rows.append({
-                                "Sportsbook": b_title,
-                                "Market": m_key.replace('player_', '').replace('_', ' ').title(),
-                                "Player": outcome.get('description'),
-                                "Line": outcome.get('point'),
-                                "Odds": decimal_to_american(outcome.get('price'))
-                            })
+                for outcome in market.get('outcomes', []):
+                    if outcome.get('name') == 'Over':
+                        prop_rows.append({
+                            "Sportsbook": b_title,
+                            "Player": outcome.get('description'),
+                            "Line": outcome.get('point'),
+                            "Over Odds": decimal_to_american(outcome.get('price'))
+                        })
         if prop_rows:
-            st.write(f"**Available Player Props for {selected_game_label}:**")
-            st.dataframe(pd.DataFrame(prop_rows), use_container_width=True)
+            prop_df = pd.DataFrame(prop_rows)
+            st.dataframe(prop_df, use_container_width=True, height=450)
         else:
-            st.info("ℹ️ Sportsbooks have not posted player prop markets for this specific game yet (typically go live 2-4 hours before puck drop).")
+            st.info("ℹ️ No player prop markets currently posted for this game matchup.")
 
     st.divider()
-    st.write("### 🧮 Manual Single Prop +EV Valuator")
+    st.write("### 🧮 Single Prop +EV Valuator")
     col1, col2, col3 = st.columns(3)
 
     with col1:
