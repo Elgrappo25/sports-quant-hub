@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Multi-market evaluation, robust per-game scaling, and slate matching.")
+st.markdown("### Multi-market custom algorithmic pricing, schedule-filtered slate matching, and multi-season processing.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -94,7 +94,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick files below. Projections are scaled accurately to per-game expectations.")
+    st.write("Drop your 4 Natural Stat Trick files below. Each market uses custom algorithmic scaling (Rate-volume for SOG, production-blended regression for scoring).")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -132,7 +132,6 @@ with tab2:
                 prev_team_df = pd.read_csv(file)
                 
         if curr_player_df is not None and prev_player_df is not None:
-            # Fetch live schedule teams for target date
             active_teams = set()
             try:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
@@ -147,35 +146,54 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule fetch warning: {e}")
 
-            stat_map = {
-                "Shots on Goal (SOG)": "Shots/60",
-                "Points (G+A)": "Total Points/60",
-                "Anytime Goal Scorer": "Goals/60",
-                "Assists Only": "Total Assists/60",
-                "Power-Play Points (PPP)": "Goals/60"
-            }
-            target_col = stat_map.get(batch_market, "Shots/60")
-            
+            # TAILORED MARKET STRATEGY MAPPING
+            # SOG uses pure rate-volume. Scoring markets use production normalization with regression buffers.
+            if batch_market == "Shots on Goal (SOG)":
+                target_col = "Shots/60"
+                is_rate_volume = True
+            elif batch_market == "Points (G+A)":
+                target_col = "Total Points/60"
+                is_rate_volume = False
+            elif batch_market == "Anytime Goal Scorer":
+                target_col = "Goals/60"
+                is_rate_volume = False
+            elif batch_market == "Assists Only":
+                target_col = "Total Assists/60"
+                is_rate_volume = False
+            else:  # Power-Play Points (PPP)
+                target_col = "Goals/60"  # Proxy/fallback metric if specific PPP rate varies
+                is_rate_volume = False
+
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
-                # Robust per-game scaling: Rate per 60 converted to per-game using TOI/GP, capped/normalized for realism
                 toi_prev = merged_df.get('TOI/GP_prev', pd.Series([18.0]*len(merged_df)))
                 toi_curr = merged_df.get('TOI/GP_curr', pd.Series([18.0]*len(merged_df)))
                 
-                # Standard conversion: (Rate / 60) * TOI_per_game gives expected stat per game.
-                # To prevent small-sample explosion (e.g. 1 game played with high rate), we factor in GP reliability.
-                gp_curr = merged_df.get('GP_curr', pd.Series([1]*len(merged_df)))
+                toi_prev_safe = toi_prev.apply(lambda x: x if pd.notnull(x) and x > 5 else 18.0)
+                toi_curr_safe = toi_curr.apply(lambda x: x if pd.notnull(x) and x > 5 else 18.0)
                 
-                merged_df['Baseline_Stat'] = (merged_df[f'{target_col}_prev'] / 60.0) * toi_prev
-                raw_curr_stat = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr
+                # Baseline calculation (Historical rate scaled by ice time)
+                merged_df['Baseline_Stat'] = (merged_df[f'{target_col}_prev'] / 60.0) * toi_prev_safe
+                raw_curr_stat = (merged_df[f'{target_col}_curr'] / 60.0) * toi_curr_safe
                 
-                # Blend baseline and current with sample weighting
+                # Apply market-specific algorithmic adjustments
+                if is_rate_volume:
+                    # SOG: Pure volume scaling (shots scale linearly with ice time)
+                    pass
+                else:
+                    # Scoring markets: Apply regression dampening for early-season small sample variance
+                    raw_curr_stat = pd.Series([
+                        min(val, 1.85) if pd.notnull(val) else 0.5 for val in raw_curr_stat
+                    ])
+                    merged_df['Baseline_Stat'] = pd.Series([
+                        min(val, 1.75) if pd.notnull(val) else 0.5 for val in merged_df['Baseline_Stat']
+                    ])
+
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (raw_curr_stat * (season_weight / 100))
                 
                 team_col = 'Team_curr' if 'Team_curr' in merged_df.columns else 'Team'
                 
-                # Option to toggle schedule filter
                 filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
                 if filter_slate and active_teams and team_col in merged_df.columns:
                     filtered_df = merged_df[merged_df[team_col].isin(active_teams)].copy()
@@ -186,7 +204,7 @@ with tab2:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
                 st.write(f"### 📈 Slate Projections Board ({batch_market}):")
-                display_cols = ['Player', team_col, 'Baseline_Stat', 'Blended_Proj']
+                display_cols = ['Player', team_col, 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
                 st.dataframe(
                     merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).reset_index(drop=True),
                     use_container_width=True,
