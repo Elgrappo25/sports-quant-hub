@@ -6,11 +6,12 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based per-game scaling, schedule-filtered slate matching, and multi-season processing.")
+st.markdown("### Count-based per-game scaling, slate filtering, and minimum sample size controls.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
+min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 # Navigation Tabs
@@ -124,7 +125,6 @@ with tab2:
             fname = file.name.lower()
             if "player" in fname:
                 temp_df = pd.read_csv(file)
-                # Automatically distinguish current season (small GP / early season) vs previous season (large GP)
                 if 'GP' in temp_df.columns and temp_df['GP'].max() <= 20:
                     curr_player_df = temp_df
                 else:
@@ -151,22 +151,23 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule fetch warning: {e}")
 
-            # Map markets to Count columns in NST files
             col_map = {
                 "Shots on Goal (SOG)": "Shots",
                 "Points (G+A)": "Total Points",
                 "Anytime Goal Scorer": "Goals",
                 "Assists Only": "Total Assists",
-                "Power-Play Points (PPP)": "Total Points" # fallback if specific PPP col differs
+                "Power-Play Points (PPP)": "Total Points"
             }
             target_col = col_map.get(batch_market, "Total Points")
 
             if target_col in curr_player_df.columns and target_col in prev_player_df.columns:
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
-                # PER-GAME COUNT CALCULATION: Total Count / Games Played (GP)
                 gp_prev = merged_df.get('GP_prev', pd.Series([82]*len(merged_df))).replace(0, 1)
                 gp_curr = merged_df.get('GP_curr', pd.Series([5]*len(merged_df))).replace(0, 1)
+                
+                # Apply minimum games played filter to remove small-sample noise
+                merged_df = merged_df[merged_df['GP_curr'] >= min_gp].copy()
                 
                 merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] / gp_prev
                 merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] / gp_curr
@@ -180,7 +181,7 @@ with tab2:
                     filtered_df = merged_df[merged_df[team_col].isin(active_teams)].copy()
                     if len(filtered_df) > 0:
                         merged_df = filtered_df
-                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** playing on {target_date}.")
+                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
                     else:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
@@ -196,7 +197,7 @@ with tab2:
         else:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drop all 4 files above to generate slate projections.")
+        st.info("💡 **Instructions:** Drag and drop all 4 files above to generate slate projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
