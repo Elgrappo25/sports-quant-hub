@@ -19,7 +19,7 @@ st.sidebar.divider()
 st.sidebar.header("🔌 Live Odds & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
 available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet", "bet365"])
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet"])
 
 # Helper function for Poisson probability calculation
 def poisson_prob(lam, k):
@@ -62,11 +62,11 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Live Odds API & Poisson Prop Valuator")
-    st.write("Click the button below only when you want to pull live market odds (saves your monthly API credits).")
+    st.subheader("Live +EV Prop Scanner & API Valuator")
+    st.write("Scan live game moneylines or fetch player prop markets to compare against your Poisson model.")
     
     col_fetch1, col_fetch2 = st.columns([1, 3])
-    fetch_clicked = col_fetch1.button("🔄 Fetch Live Odds Now")
+    fetch_clicked = col_fetch1.button("🔄 Fetch Live Odds & Props")
     
     live_games = []
     if fetch_clicked:
@@ -75,27 +75,29 @@ with tab1:
         else:
             try:
                 books_str = ",".join(selected_books)
-                odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us,us2&markets=h2h&bookmakers={books_str}"
-                resp = requests.get(odds_url, timeout=5)
+                # Requesting h2h (moneylines) and player props in a single call
+                odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us,us2&markets=h2h,player_shots_on_goal,player_points,player_goals&bookmakers={books_str}"
+                resp = requests.get(odds_url, timeout=8)
                 if resp.status_code == 200:
                     live_games = resp.json()
                     st.session_state['live_games'] = live_games
-                    st.success(f"🟢 Successfully pulled live odds! ({len(live_games)} games found)")
+                    st.success(f"🟢 Successfully pulled live odds & props! ({len(live_games)} games found)")
                 else:
-                    st.warning(f"⚠️ API Error: Status {resp.status_code}")
+                    st.warning(f"⚠️ API Error: Status {resp.status_code} - Check API quota or market availability.")
             except Exception as e:
                 st.warning(f"⚠️ Connection Failed: {e}")
     elif 'live_games' in st.session_state:
         live_games = st.session_state['live_games']
 
     if live_games:
-        st.write("### 🏟️ Live Games Available on Board:")
+        st.write("### 🏟️ Live Game Line Shopping:")
         game_options = [f"{g['away_team']} @ {g['home_team']} ({g['commence_time'][:10]})" for g in live_games]
-        selected_game_label = st.selectbox("Select Live Game to Inspect", game_options)
+        selected_game_label = st.selectbox("Select Live Game to Inspect", game_options, key="tab1_game_select")
         
         selected_game_obj = live_games[game_options.index(selected_game_label)]
-        st.write(f"**Bookmaker Lines for {selected_game_label} (American Odds):**")
         
+        # Display Moneyline Table
+        st.write(f"**Moneyline Lines for {selected_game_label}:**")
         book_rows = []
         for bookmaker in selected_game_obj.get('bookmakers', []):
             b_title = bookmaker['title']
@@ -111,8 +113,31 @@ with tab1:
                     })
         if book_rows:
             st.dataframe(pd.DataFrame(book_rows), use_container_width=True)
+            
+        # Extract Player Props if available
+        prop_rows = []
+        for bookmaker in selected_game_obj.get('bookmakers', []):
+            b_title = bookmaker['title']
+            for market in bookmaker.get('markets', []):
+                m_key = market['key']
+                if m_key in ['player_shots_on_goal', 'player_points', 'player_goals']:
+                    for outcome in market.get('outcomes', []):
+                        if outcome.get('name') == 'Over':
+                            prop_rows.append({
+                                "Sportsbook": b_title,
+                                "Market": m_key.replace('player_', '').replace('_', ' ').title(),
+                                "Player": outcome.get('description'),
+                                "Line": outcome.get('point'),
+                                "Odds": decimal_to_american(outcome.get('price'))
+                            })
+        if prop_rows:
+            st.write(f"**Available Player Props for {selected_game_label}:**")
+            st.dataframe(pd.DataFrame(prop_rows), use_container_width=True)
+        else:
+            st.info("ℹ️ Sportsbooks have not posted player prop markets for this specific game yet (typically go live 2-4 hours before puck drop).")
 
     st.divider()
+    st.write("### 🧮 Manual Single Prop +EV Valuator")
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -371,7 +396,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
@@ -389,7 +414,7 @@ with tab3:
         leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists", key="t3_l1_name")
         leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5, key="t3_l1_odds")
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Regions", value="Draisaitl Over 0.5 Points", key="t3_l2_name")
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points", key="t3_l2_name")
         leg2_odds = st.number_input("Leg 2 American Odds", value=130, step=5, key="t3_l2_odds")
         
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
