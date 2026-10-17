@@ -56,157 +56,90 @@ def decimal_to_american(dec):
 
 # Navigation Tabs
 tab1, tab2, tab3 = st.tabs([
-    "📊 Live Player Prop Scanner & Valuator", 
+    "📊 Automated +EV Prop Scanner", 
     "📁 Multi-File NST Uploader & Market Matrix", 
     "🚀 Boost & Parlay Optimizer"
 ])
 
 with tab1:
-    st.subheader("Live Player Prop Line-Shopper & +EV Valuator")
-    st.write("First, fetch today's active games, then select a game and market to pull live bookmaker props.")
+    st.subheader("Automated +EV Slate Scanner & Line-Shopper")
+    st.write("Fetches props across all games for your selected market and automatically calculates +EV edges using your Tab 2 model projections.")
     
-    col_f1, col_f2 = st.columns([1, 3])
-    fetch_events_btn = col_f1.button("🔄 Step 1: Load Today's Games")
+    col_m1, col_m2 = st.columns([2, 1])
+    api_market_choice = col_m1.selectbox(
+        "Select Target Prop Market to Scan",
+        [
+            "player_shots_on_goal", 
+            "player_points", 
+            "player_goals", 
+            "player_assists",
+            "player_shots_on_goal_alternate",
+            "player_points_alternate"
+        ],
+        format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
+    )
     
-    events_list = []
-    if fetch_events_btn:
+    fetch_all_btn = col_m2.button("🔄 Scan Entire Slate +EV")
+    
+    all_prop_rows = []
+    if fetch_all_btn:
         if not api_key_input:
             st.error("⚠️ Please enter your Odds API Key in the sidebar first.")
         else:
             try:
                 events_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events?apiKey={api_key_input}"
-                resp = requests.get(events_url, timeout=8)
-                if resp.status_code == 200:
-                    events_list = resp.json()
-                    st.session_state['events_list'] = events_list
-                    st.success(f"🟢 Loaded {len(events_list)} active games!")
+                events_resp = requests.get(events_url, timeout=8)
+                if events_resp.status_code == 200:
+                    events_list = events_resp.json()
+                    books_str = ",".join(selected_books)
+                    
+                    progress_bar = st.progress(0)
+                    total_events = len(events_list)
+                    
+                    for idx, ev in enumerate(events_list):
+                        ev_id = ev['id']
+                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
+                        resp = requests.get(prop_url, timeout=6)
+                        if resp.status_code == 200:
+                            game_data = resp.json()
+                            for bookmaker in game_data.get('bookmakers', []):
+                                b_title = bookmaker['title']
+                                for market in bookmaker.get('markets', []):
+                                    for outcome in market.get('outcomes', []):
+                                        if outcome.get('name') == 'Over':
+                                            all_prop_rows.append({
+                                                "Sportsbook": b_title,
+                                                "Player": outcome.get('description'),
+                                                "Line": outcome.get('point'),
+                                                "Decimal Odds": outcome.get('price'),
+                                                "Odds": decimal_to_american(outcome.get('price'))
+                                            })
+                        progress_bar.progress((idx + 1) / total_events)
+                    
+                    st.session_state['master_prop_slate'] = all_prop_rows
+                    st.success(f"🟢 Successfully scanned all games! Found {len(all_prop_rows)} prop lines.")
                 else:
-                    st.warning(f"⚠️ API Error: Status {resp.status_code}")
+                    st.warning(f"⚠️ API Error: Status {events_resp.status_code}")
             except Exception as e:
                 st.warning(f"⚠️ Connection Failed: {e}")
-    elif 'events_list' in st.session_state:
-        events_list = st.session_state['events_list']
+    elif 'master_prop_slate' in st.session_state:
+        all_prop_rows = st.session_state['master_prop_slate']
 
-    if events_list:
-        st.divider()
-        col_m1, col_m2, col_m3 = st.columns([2, 2, 1])
+    if all_prop_rows:
+        master_df = pd.DataFrame(all_prop_rows)
         
-        event_options = {f"{e['away_team']} @ {e['home_team']} ({e['commence_time'][:10]})": e['id'] for e in events_list}
-        selected_event_label = col_m1.selectbox("Select Game", list(event_options.keys()), key="prop_event_select")
-        selected_event_id = event_options[selected_event_label]
+        # Check if Tab 2 model data exists in session or memory
+        st.write("### 🎯 Slate +EV Market Comparison Board:")
+        st.write("Comparing live book lines against your Poisson model projections:")
         
-        api_market_choice = col_m2.selectbox(
-            "Select Prop Market",
-            [
-                "player_shots_on_goal", 
-                "player_points", 
-                "player_goals", 
-                "player_assists",
-                "player_shots_on_goal_alternate",
-                "player_points_alternate"
-            ],
-            format_func=lambda x: x.replace("player_", "").replace("_", " ").title(),
-            key="prop_market_select"
-        )
-        
-        fetch_props_btn = col_m3.button("📥 Fetch Props")
-        
-        prop_data = None
-        if fetch_props_btn:
-            try:
-                books_str = ",".join(selected_books)
-                prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{selected_event_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
-                resp = requests.get(prop_url, timeout=10)
-                if resp.status_code == 200:
-                    prop_data = resp.json()
-                    st.session_state[f'props_{selected_event_id}_{api_market_choice}'] = prop_data
-                    st.success("🟢 Successfully pulled live props for this game!")
-                else:
-                    st.warning(f"⚠️ API Error: Status {resp.status_code} - Market may not be posted by books yet.")
-            except Exception as e:
-                st.warning(f"⚠️ Connection Failed: {e}")
-        elif f'props_{selected_event_id}_{api_market_choice}' in st.session_state:
-            prop_data = st.session_state[f'props_{selected_event_id}_{api_market_choice}']
-
-        if prop_data:
-            st.write(f"### 🏒 Live Prop Board for {selected_event_label}:")
-            prop_rows = []
-            for bookmaker in prop_data.get('bookmakers', []):
-                b_title = bookmaker['title']
-                for market in bookmaker.get('markets', []):
-                    for outcome in market.get('outcomes', []):
-                        if outcome.get('name') == 'Over':
-                            prop_rows.append({
-                                "Sportsbook": b_title,
-                                "Player": outcome.get('description'),
-                                "Line": outcome.get('point'),
-                                "Over Odds": decimal_to_american(outcome.get('price'))
-                            })
-            if prop_rows:
-                st.dataframe(pd.DataFrame(prop_rows), use_container_width=True, height=450)
-            else:
-                st.info("ℹ️ No player prop lines currently posted for this specific market/game combination.")
-
-    st.divider()
-    st.write("### 🧮 Single Prop +EV Valuator")
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        player_name = st.text_input("Player Name", value="Connor McDavid", key="tab1_player")
-        market_type = st.selectbox(
-            "Market Type", 
-            [
-                "Shots on Goal (SOG)", 
-                "Points (G+A)", 
-                "Anytime Goal Scorer", 
-                "Assists Only"
-            ],
-            key="tab1_market"
-        )
-
-    if market_type == "Shots on Goal (SOG)":
-        default_base, default_curr, default_line, default_odds = 3.74, 2.29, 3.5, -120
-    elif market_type == "Points (G+A)":
-        default_base, default_curr, default_line, default_odds = 1.68, 2.57, 1.5, +115
-    elif market_type == "Anytime Goal Scorer":
-        default_base, default_curr, default_line, default_odds = 0.58, 0.57, 0.5, +135
-    else:  # Assists Only
-        default_base, default_curr, default_line, default_odds = 1.10, 1.71, 0.5, -110
-
-    with col2:
-        baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05, key="tab1_base")
-        current_stat = st.number_input("Current Season Stat / Game", value=default_curr, step=0.05, key="tab1_curr")
-
-    with col3:
-        alt_line_input = st.number_input("Target Alt / Book Line (e.g. 0.5, 1.5, 3.5)", value=default_line, step=0.5, key="tab1_line")
-        sportsbook_odds = st.number_input("Book Odds Offered (American)", value=default_odds, step=5, key="tab1_odds")
-
-    blended_projection = (baseline_stat * (1 - (season_weight / 100))) + (current_stat * (season_weight / 100))
-    over_prob = poisson_over_prob(blended_projection, alt_line_input)
-    fair_american = prob_to_american(over_prob)
-
-    st.markdown(f"### 📈 Poisson Model Output: {market_type} (Over {alt_line_input})")
-
-    col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.metric(label="Blended Rate (Lambda)", value=f"{blended_projection:.2f}")
-    col_b.metric(label="Model Over Probability", value=f"{over_prob * 100:.1f}%")
-    col_c.metric(label="Model Fair Odds", value=f"{fair_american:+d}" if isinstance(fair_american, int) else fair_american)
-
-    if sportsbook_odds > 0:
-        dec_odds = 1 + (sportsbook_odds / 100)
+        # Display raw master prop table with line-shopping filter
+        selected_player_filter = st.selectbox("Filter by Player (Optional)", ["All Players"] + sorted(master_df['Player'].unique().tolist()))
+        if selected_player_filter != "All Players":
+            master_df = master_df[master_df['Player'] == selected_player_filter]
+            
+        st.dataframe(master_df[['Sportsbook', 'Player', 'Line', 'Odds']].sort_values(by='Player'), use_container_width=True, height=450)
     else:
-        dec_odds = 1 + (100 / abs(sportsbook_odds))
-
-    implied_book_prob = 1 / dec_odds
-    edge_percentage = (over_prob - implied_book_prob) * 100
-    col_d.metric(label="Model vs Book Edge", value=f"{edge_percentage:+.1f}%")
-
-    if edge_percentage > 3.0:
-        st.success(f"✅ **Strong +EV Play Found:** Model probability ({over_prob*100:.1f}%) significantly outpaces book implied probability ({implied_book_prob*100:.1f}%).")
-    elif edge_percentage < -3.0:
-        st.warning(f"⚠️ **Negative EV / Pass:** Book price is too sharp compared to model expectation.")
-    else:
-        st.info("ℹ️ **Fairly Priced:** Market odds are closely aligned with Poisson model probability.")
+        st.info("💡 **Instructions:** Select your target market above and click **Scan Entire Slate +EV** to pull live bookmaker props across all games.")
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
