@@ -27,7 +27,7 @@ st.sidebar.divider()
 st.sidebar.header("🔌 Live Props & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
 available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"])
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet", "pinnacle"])
 
 # Helper functions for Poisson probability calculation
 def poisson_prob(lam, k):
@@ -106,7 +106,8 @@ with tab1:
                     
                     for idx, ev in enumerate(events_list):
                         ev_id = ev['id']
-                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2,ca,eu&markets={api_market_choice}&bookmakers={books_str}"
+                        # Strictly query US region feed for seamless book collection including FanDuel
+                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
                         resp = requests.get(prop_url, timeout=6)
                         if resp.status_code == 200:
                             game_data = resp.json()
