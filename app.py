@@ -5,18 +5,18 @@ from datetime import date
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
-st.title("🏒 NHL Quant Terminal: Complete Production Suite")
-st.markdown("### Live multi-market evaluation, NST batch sheet processing, boost optimization, and live schedule tracking.")
+st.title("🏒 NHL Quant Terminal: Native NST Batch Suite")
+st.markdown("### Multi-market evaluation, raw Natural Stat Trick multi-season file merging, and boost optimization.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=40, step=5)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
-# Navigation Tabs (Added Live Schedule Tab!)
+# Navigation Tabs
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Smart Market Evaluator", 
-    "📁 NST Batch CSV Uploader", 
+    "📁 Native NST Batch Uploader", 
     "🚀 Boost & Parlay Optimizer",
     "📅 Live NHL Schedule & Matchups"
 ])
@@ -39,7 +39,6 @@ with tab1:
             ]
         )
 
-    # Smart defaults based on market type
     if market_type == "Shots on Goal (SOG)":
         default_base, default_curr, default_line, default_odds = 3.85, 4.20, 3.5, -120
     elif market_type == "Points (G+A)":
@@ -59,7 +58,6 @@ with tab1:
         sportsbook_line = st.number_input("Sportsbook Line (Standard or Alt)", value=default_line, step=0.5)
         sportsbook_odds = st.number_input("Sportsbook Odds (American)", value=default_odds, step=5)
 
-    # Blended Projection Calculation
     blended_projection = (baseline_stat * (1 - (season_weight / 100))) + (current_stat * (season_weight / 100))
 
     st.markdown(f"### 📈 Model Output: {market_type}")
@@ -67,7 +65,6 @@ with tab1:
     col_a, col_b, col_c = st.columns(3)
     col_a.metric(label=f"Blended Expected Value", value=f"{blended_projection:.2f}")
 
-    # Odds conversion & boost calculation
     if sportsbook_odds > 0:
         dec_odds = 1 + (sportsbook_odds / 100)
     else:
@@ -96,11 +93,11 @@ with tab1:
         st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
 
 with tab2:
-    st.subheader("Natural Stat Trick Batch Data Sheet Processor")
-    st.write("Select the target market for your batch sheet, then upload your CSV to compute edges.")
+    st.subheader("Natural Stat Trick Native File Processor")
+    st.write("Upload your raw NST player season total exports (Current Season & Previous Season) to merge and calculate edges automatically.")
     
     batch_market = st.selectbox(
-        "Select Market Type for This Batch Sheet", 
+        "Select Target Prop Market", 
         [
             "Shots on Goal (SOG)", 
             "Points (G+A)", 
@@ -108,36 +105,48 @@ with tab2:
             "Assists Only", 
             "Power-Play Points (PPP)"
         ],
-        key="batch_market_select"
+        key="native_batch_market"
     )
     
-    st.info(f"💡 **Active Batch Market:** Evaluating **{batch_market}**. Expected CSV Columns: `Player`, `Baseline_Stat`, `Current_Stat`, `Line`, `Odds`")
-    
-    uploaded_file = st.file_uploader("Choose a Natural Stat Trick CSV Export", type="csv")
-    
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        st.write(f"### 📋 Raw Uploaded Data Preview ({batch_market}):")
-        st.dataframe(df.head(10))
-        try:
-            df['Market'] = batch_market
-            df['Blended_Proj'] = (df['Baseline_Stat'] * (1 - (season_weight / 100))) + (df['Current_Stat'] * (season_weight / 100))
-            df['Edge'] = df['Blended_Proj'] - df['Line']
-            st.write(f"### 📈 Processed Model Edges for {batch_market} (Sorted High to Low):")
-            cols_to_show = ['Player', 'Market', 'Baseline_Stat', 'Current_Stat', 'Line', 'Odds', 'Blended_Proj', 'Edge']
-            st.dataframe(df[cols_to_show].sort_values(by='Edge', ascending=False))
-        except Exception as e:
-            st.error(f"Error processing columns. Please ensure your CSV headers include: Player, Baseline_Stat, Current_Stat, Line, Odds. Details: {e}")
+    col_file1, col_file2 = st.columns(2)
+    with col_file1:
+        curr_file = st.file_uploader("Upload Current Season NST CSV", type="csv", key="curr_nst")
+    with col_file2:
+        prev_file = st.file_uploader("Upload Previous Season NST CSV", type="csv", key="prev_nst")
+        
+    if curr_file is not None and prev_file is not None:
+        df_curr = pd.read_csv(curr_file)
+        df_prev = pd.read_csv(prev_file)
+        
+        # Map NST column based on market type
+        stat_map = {
+            "Shots on Goal (SOG)": "Shots/60",
+            "Points (G+A)": "Total Points/60",
+            "Anytime Goal Scorer": "Goals/60",
+            "Assists Only": "Total Assists/60",
+            "Power-Play Points (PPP)": "Goals/60" # Fallback or proxy if PPP column varies
+        }
+        target_col = stat_map.get(batch_market, "Shots/60")
+        
+        if target_col in df_curr.columns and target_col in df_prev.columns:
+            # Merge current and previous on Player name
+            merged_df = pd.merge(df_curr, df_prev, on='Player', suffixes=('_curr', '_prev'), how='inner')
+            
+            # Estimate per-game baseline & current stat using TOI/GP if available, or rate / 20 as per-game proxy
+            merged_df['Baseline_Stat'] = merged_df[f'{target_col}_prev'] * (merged_df.get('TOI/GP_prev', 15) / 60)
+            merged_df['Current_Stat'] = merged_df[f'{target_col}_curr'] * (merged_df.get('TOI/GP_curr', 15) / 60)
+            
+            merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+            
+            st.success(f"Successfully merged {len(merged_df)} players across seasons using metric: **{target_col}**!")
+            st.write("### 📈 Processed Multi-Season Player Projections:")
+            display_cols = ['Player', 'Team_curr', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj']
+            st.dataframe(merged_df[display_cols].sort_values(by='Blended_Proj', ascending=False).head(25))
+        else:
+        # Fallback if specific column name isn't found
+            st.error(f"Could not find exact column '{target_col}' in uploaded files. Please ensure valid NST season total exports.")
     else:
-        st.write("### 🔎 Example Batch Template Format:")
-        example_data = pd.DataFrame({
-            'Player': ['Connor McDavid', 'Cale Makar', 'Leon Draisaitl', 'Auston Matthews'],
-            'Baseline_Stat': [0.90, 0.50, 0.85, 0.65],
-            'Current_Stat': [1.05, 0.60, 0.95, 0.75],
-            'Line': [0.5, 0.5, 0.5, 1.5],
-            'Odds': [-110, +130, -105, +170]
-        })
-        st.dataframe(example_data)
+        st.info("💡 **Instructions:** Upload both your Current Season and Previous Season Natural Stat Trick CSV files above to automatically merge baselines and compute multi-season player projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
