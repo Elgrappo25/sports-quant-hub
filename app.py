@@ -7,7 +7,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and dynamic color-coded edge detection.")
+st.markdown("### Count-based scaling, market-specific defensive matching, Poisson alt-line math, and market-tailored color coding.")
 
 # Sidebar for global settings & Live Odds configuration
 st.sidebar.header("⚙️ Global Model Settings")
@@ -115,8 +115,8 @@ with tab1:
         st.info("ℹ️ **Fairly Priced:** Market odds are closely aligned with Poisson model probability.")
 
 with tab2:
-    st.subheader("Single Dropzone: Multi-File NST Processor & Dynamic Alt-Line Matrix")
-    st.write("Drop your 4 Natural Stat Trick count files below. Color coding adapts dynamically to your chosen target threshold line.")
+    st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
+    st.write("Drop your 4 Natural Stat Trick count files below. Color coding is custom-tailored to each specific betting market.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -183,8 +183,8 @@ with tab2:
                 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI',
                 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
                 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
-                'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Vancouver Canucks': 'VAN', 
-                'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
+                'Utah Mammoth': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK',
+                'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
             }
 
             def clean_team(team_str):
@@ -288,7 +288,7 @@ with tab2:
             
             final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
 
-            # DYNAMIC COLOR-CODING BASED ON THRESHOLD LINE
+            # MARKET-TAILORED COLOR CODING THRESHOLDS
             def color_matrix_cells(val, col_name):
                 if isinstance(val, (int, float)):
                     if col_name == 'Matchup_Factor':
@@ -297,13 +297,15 @@ with tab2:
                         elif val < 0.95:
                             return 'color: #FF5252; font-weight: bold;'
                     elif col_name == 'Model_Over_Prob_%':
-                        # Dynamic thresholds based on target line
-                        if target_line_choice <= 0.5:
-                            green_thresh, red_thresh = 75.0, 50.0
-                        elif target_line_choice <= 1.5:
-                            green_thresh, red_thresh = 55.0, 30.0
-                        else:
-                            green_thresh, red_thresh = 40.0, 20.0
+                        # Tailor green/red thresholds based on specific market type
+                        if batch_market == "Anytime Goal Scorer":
+                            green_thresh, red_thresh = 42.0, 32.0
+                        elif batch_market == "Points (G+A)":
+                            green_thresh, red_thresh = (72.0 if target_line_choice <= 0.5 else 45.0), 50.0
+                        elif batch_market == "Assists Only":
+                            green_thresh, red_thresh = (65.0 if target_line_choice <= 0.5 else 40.0), 45.0
+                        else:  # Shots on Goal
+                            green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
                             
                         if val >= green_thresh:
                             return 'color: #00E676; font-weight: bold;'
@@ -311,7 +313,6 @@ with tab2:
                             return 'color: #FF5252; font-weight: bold;'
                 return 'color: #CFD8DC;'
 
-            # Apply styling column by column safely
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
                            .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
@@ -332,7 +333,8 @@ with tab3:
         leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists")
         leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5)
     with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points")
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over > 0.5 Points", key="t3_l2")
+        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points", key="t3_l2_fix")
         leg2_odds = st.number_input("Leg 2 American Odds", value=+130, step=5)
         
     dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
