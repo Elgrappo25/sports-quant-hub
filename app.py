@@ -53,21 +53,56 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
     st.subheader("Live Odds API & Poisson Prop Valuator")
-    st.write("Scan live sportsbook odds via API or test custom alt-line projections on the fly.")
+    st.write("Click the button below only when you want to pull live market odds (saves your monthly API credits).")
     
-    live_feed_data = None
-    if api_key_input:
-        try:
-            odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us&markets=h2h"
-            resp = requests.get(odds_url, timeout=5)
-            if resp.status_code == 200:
-                live_feed_data = resp.json()
-                st.sidebar.success(f"🟢 Odds API Connected ({len(live_feed_data)} games live)")
-            else:
-                st.sidebar.warning(f"⚠️ API Error: Status {resp.status_code}")
-        except Exception as e:
-            st.sidebar.warning(f"⚠️ API Connection Failed: {e}")
+    col_fetch1, col_fetch2 = st.columns([1, 3])
+    fetch_clicked = col_fetch1.button("🔄 Fetch Live Odds Now")
+    
+    live_games = []
+    if fetch_clicked:
+        if not api_key_input:
+            st.error("⚠️ Please enter your Odds API Key in the sidebar first.")
+        else:
+            try:
+                books_str = ",".join(selected_books)
+                odds_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds/?apiKey={api_key_input}&regions=us&markets=h2h&bookmakers={books_str}"
+                resp = requests.get(odds_url, timeout=5)
+                if resp.status_code == 200:
+                    live_games = resp.json()
+                    st.session_state['live_games'] = live_games
+                    st.success(f"🟢 Successfully pulled live odds! ({len(live_games)} games found)")
+                else:
+                    st.warning(f"⚠️ API Error: Status {resp.status_code}")
+            except Exception as e:
+                st.warning(f"⚠️ Connection Failed: {e}")
+    elif 'live_games' in st.session_state:
+        live_games = st.session_state['live_games']
 
+    if live_games:
+        st.write("### 🏟️ Live Games Available on Board:")
+        game_options = [f"{g['away_team']} @ {g['home_team']} ({g['commence_time'][:10]})" for g in live_games]
+        selected_game_label = st.selectbox("Select Live Game to Inspect", game_options)
+        
+        selected_game_obj = live_games[game_options.index(selected_game_label)]
+        st.write(f"**Bookmaker Lines for {selected_game_label}:**")
+        
+        book_rows = []
+        for bookmaker in selected_game_obj.get('bookmakers', []):
+            b_title = bookmaker['title']
+            for market in bookmaker.get('markets', []):
+                if market['key'] == 'h2h':
+                    outcomes = market['outcomes']
+                    away_price = next((o['price'] for o in outcomes if o['name'] == selected_game_obj['away_team']), None)
+                    home_price = next((o['price'] for o in outcomes if o['name'] == selected_game_obj['home_team']), None)
+                    book_rows.append({
+                        "Sportsbook": b_title,
+                        f"Away ({selected_game_obj['away_team']}) Odds": away_price,
+                        f"Home ({selected_game_obj['home_team']}) Odds": home_price
+                    })
+        if book_rows:
+            st.dataframe(pd.DataFrame(book_rows), use_container_width=True)
+
+    st.divider()
     col1, col2, col3 = st.columns(3)
 
     with col1:
