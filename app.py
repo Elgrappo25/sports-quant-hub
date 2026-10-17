@@ -170,7 +170,6 @@ with tab1:
             
             merged_model['Blended_Proj'] = (merged_model['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100))
             
-            # Map clean team and matchup factor
             nst_to_standard = {
                 'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ',
                 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET',
@@ -189,7 +188,6 @@ with tab1:
             merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
             merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
 
-            # Now merge with live odds
             merged_scan = pd.merge(master_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
             
             if len(merged_scan) == 0:
@@ -211,7 +209,6 @@ with tab1:
                 merged_scan['Edge (%)'] = merged_scan.apply(calc_edge, axis=1)
                 merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
                 
-                # Summary Metrics Bar
                 pos_ev_count = len(merged_scan[merged_scan['Edge (%)'] > 3.0])
                 top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
                 
@@ -378,7 +375,6 @@ with tab2:
 
             prev_col = target_col
 
-            # Save raw dataframes to session state so Tab 1 can dynamically compute the correct market rate
             st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
 
             merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
@@ -401,7 +397,6 @@ with tab2:
             merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
             merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
 
-            # Calculate Poisson Probabilities and Fair Odds
             merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
             merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
             merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
@@ -445,7 +440,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
