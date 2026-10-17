@@ -17,15 +17,47 @@ st.markdown("""
 st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
 
-# Sidebar for global settings & Live Props configuration
+# Navigation Tabs placed early so we can read market choice for sidebar defaults
+tab1, tab2, tab3 = st.tabs([
+    "📊 Automated +EV Prop Scanner", 
+    "📁 Multi-File NST Uploader & Market Matrix", 
+    "🚀 Boost & Parlay Optimizer"
+])
+
+with tab1:
+    st.subheader("Automated +EV Slate Scanner & Line-Shopper")
+    st.write("Scans live book props across standard & alternate endpoints, filtering out model glitches and matching against your Tab 2 model projections.")
+    
+    col_m1, col_m2 = st.columns([2, 1])
+    api_market_choice = col_m1.selectbox(
+        "Select Target Prop Market to Scan",
+        [
+            "player_points", 
+            "player_shots_on_goal", 
+            "player_goals", 
+            "player_assists"
+        ],
+        format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
+    )
+
+# Sidebar for global settings & Market-Tailored Edge Filters
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
 min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
 
 st.sidebar.divider()
-st.sidebar.header("🎯 Edge & Value Filters")
-min_edge_filter = st.sidebar.slider("Min Edge Filter (%)", min_value=0.0, max_value=30.0, value=3.0, step=0.5)
-max_edge_filter = st.sidebar.slider("Max Edge Filter (%)", min_value=5.0, max_value=70.0, value=25.0, step=1.0)
+st.sidebar.header("🎯 Market-Tailored Edge Filters")
+
+# Automatically adjust recommended slider defaults based on the selected market in Tab 1
+if "shots_on_goal" in api_market_choice:
+    default_min_edge, default_max_edge = 5.0, 15.0
+elif "goals" in api_market_choice:
+    default_min_edge, default_max_edge = 8.0, 25.0
+else:  # Points & Assists
+    default_min_edge, default_max_edge = 6.0, 18.0
+
+min_edge_filter = st.sidebar.slider("Min Edge Filter (%)", min_value=0.0, max_value=30.0, value=default_min_edge, step=0.5)
+max_edge_filter = st.sidebar.slider("Max Edge Filter (%)", min_value=5.0, max_value=70.0, value=default_max_edge, step=1.0)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 st.sidebar.divider()
@@ -67,29 +99,7 @@ def decimal_to_american(dec):
         val = int(-100 / (dec - 1))
         return f"{val}"
 
-# Navigation Tabs
-tab1, tab2, tab3 = st.tabs([
-    "📊 Automated +EV Prop Scanner", 
-    "📁 Multi-File NST Uploader & Market Matrix", 
-    "🚀 Boost & Parlay Optimizer"
-])
-
 with tab1:
-    st.subheader("Automated +EV Slate Scanner & Line-Shopper")
-    st.write("Scans live book props across standard & alternate endpoints, filtering out model glitches and matching against your Tab 2 model projections.")
-    
-    col_m1, col_m2 = st.columns([2, 1])
-    api_market_choice = col_m1.selectbox(
-        "Select Target Prop Market to Scan",
-        [
-            "player_points", 
-            "player_shots_on_goal", 
-            "player_goals", 
-            "player_assists"
-        ],
-        format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
-    )
-    
     fetch_all_btn = col_m2.button("🔄 Scan Slate & Calculate +EV", use_container_width=True)
     
     all_prop_rows = []
@@ -450,7 +460,7 @@ with tab2:
                         else:
                             green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
                             
-                        if val >= green_thresh:
+                        if val >= green_tech if 'green_tech' in locals() else val >= green_thresh:
                             return 'color: #00E676; font-weight: bold;'
                         elif val <= red_thresh:
                             return 'color: #FF5252; font-weight: bold;'
