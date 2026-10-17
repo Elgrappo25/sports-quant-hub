@@ -290,9 +290,9 @@ with tab2:
 
             def color_matrix_cells(val):
                 if isinstance(val, (int, float)):
-                    if val > 1.05 or val > 55.0: # Green for favorable matchups or high probabilities
+                    if val > 1.05 or val > 55.0:
                         return 'color: #00E676; font-weight: bold;'
-                    elif val < 0.95 or val < 35.0: # Red for tough matchups or low probabilities
+                    elif val < 0.95 or val < 35.0:
                         return 'color: #FF5252; font-weight: bold;'
                 return 'color: #CFD8DC;'
 
@@ -331,7 +331,8 @@ with tab3:
     boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
     
     st.divider()
-    col_res1, col_res2 = st.columns(2)     col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
+    col_res1, col_res2 = st.columns(2)
+    col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
     col_res2.metric(label=f"Boosted Parlay Odds (+{boost_val}%)", value=f"{boosted_parlay_american:+d}")
     
     st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost yields **{boosted_parlay_american:+d}** odds!")
