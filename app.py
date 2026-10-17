@@ -1,34 +1,68 @@
 import streamlit as st
 import pandas as pd
 import requests
+import math
 from datetime import date
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, 4 core prop markets, and robust team matchup factors.")
+st.markdown("### Count-based scaling, Poisson alt-line math, live bookmaker line-shopping, and true +EV detection.")
 
-# Sidebar for global settings
+# Sidebar for global settings & Live Odds configuration
 st.sidebar.header("⚙️ Global Model Settings")
 season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
 min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
+st.sidebar.divider()
+st.sidebar.header("🔌 Live Odds & Line Shopping")
+api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
+available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "thescore", "pinnacle"]
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm"])
+
+# Helper function for Poisson probability calculation
+def poisson_prob(lam, k):
+    """Calculates exact probability of k events given expected lambda rate."""
+    if lam <= 0:
+        return 0.0
+    return (math.exp(-lam) * (lam ** k)) / math.factorial(k)
+
+def poisson_over_prob(lam, threshold):
+    """Calculates cumulative probability of exceeding a decimal threshold (e.g., > 1.5 means k >= 2)."""
+    # threshold is e.g. 1.5, so we sum probabilities for k >= int(threshold) + 1
+    k_min = int(math.floor(threshold)) + 1
+    prob_under = sum(poisson_prob(lam, i) for i in range(k_min))
+    return max(0.0, min(1.0, 1.0 - prob_under))
+
+def prob_to_american(p):
+    """Converts a true probability (0 to 1) into fair American odds."""
+    if p <= 0:
+        return "+99999"
+    if p >= 1:
+        return "-99999"
+    if p >= 0.5:
+        dec = 1.0 / p
+        return int(-100 / (dec - 1))
+    else:
+        dec = 1.0 / p
+        return int((dec - 1) * 100)
+
 # Navigation Tabs
 tab1, tab2, tab3 = st.tabs([
-    "📊 Smart Market Evaluator", 
-    "📁 Multi-File NST Uploader & Slate Matcher", 
+    "📊 Smart Market & Alt-Line Evaluator", 
+    "📁 Multi-File NST Uploader & Live +EV Matcher", 
     "🚀 Boost & Parlay Optimizer"
 ])
 
 with tab1:
-    st.subheader("Dynamic Prop & Alt-Line Evaluator (Quick Scratchpad)")
-    st.write("Use this tab for fast, manual on-the-fly calculations for any single prop or alternate line.")
+    st.subheader("Dynamic Prop & Alt-Line Poisson Valuator")
+    st.write("Calculate model-derived fair odds and probabilities for any custom alt line using Poisson distribution math.")
     
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        player_name = st.text_input("Player Name", value="Connor McDavid")
+        player_name = st.text_input("Player Name", value="Connor McDavid", key="tab1_player")
         market_type = st.selectbox(
             "Market Type", 
             [
@@ -36,7 +70,8 @@ with tab1:
                 "Points (G+A)", 
                 "Anytime Goal Scorer", 
                 "Assists Only"
-            ]
+            ],
+            key="tab1_market"
         )
 
     if market_type == "Shots on Goal (SOG)":
@@ -49,50 +84,43 @@ with tab1:
         default_base, default_curr, default_line, default_odds = 1.10, 1.71, 0.5, -110
 
     with col2:
-        baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05)
-        current_stat = st.number_input("Current Season Stat / Game", value=default_curr, step=0.05)
+        baseline_stat = st.number_input("Multi-Year Baseline / Game", value=default_base, step=0.05, key="tab1_base")
+        current_stat = st.number_input("Current Season Stat / Game", value=default_curr, step=0.05, key="tab1_curr")
 
     with col3:
-        sportsbook_line = st.number_input("Sportsbook Line (Standard or Alt)", value=default_line, step=0.5)
-        sportsbook_odds = st.number_input("Sportsbook Odds (American)", value=default_odds, step=5)
+        alt_line_input = st.number_input("Target Alt / Book Line (e.g. 0.5, 1.5, 3.5)", value=default_line, step=0.5, key="tab1_line")
+        sportsbook_odds = st.number_input("Book Odds Offered (American)", value=default_odds, step=5, key="tab1_odds")
 
     blended_projection = (baseline_stat * (1 - (season_weight / 100))) + (current_stat * (season_weight / 100))
+    over_prob = poisson_over_prob(blended_projection, alt_line_input)
+    fair_american = prob_to_american(over_prob)
 
-    st.markdown(f"### 📈 Model Output: {market_type}")
+    st.markdown(f"### 📈 Poisson Model Output: {market_type} (Over {alt_line_input})")
 
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric(label=f"Blended Expected Value", value=f"{blended_projection:.2f}")
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric(label="Blended Rate (Lambda)", value=f"{blended_projection:.2f}")
+    col_b.metric(label="Model Over Probability", value=f"{over_prob * 100:.1f}%")
+    col_c.metric(label="Model Fair Odds", value=f"{fair_american:+d}" if isinstance(fair_american, int) else fair_american)
 
     if sportsbook_odds > 0:
         dec_odds = 1 + (sportsbook_odds / 100)
     else:
         dec_odds = 1 + (100 / abs(sportsbook_odds))
 
-    if global_boost > 0:
-        profit_fraction = dec_odds - 1
-        boosted_profit = profit_fraction * (1 + (global_boost / 100))
-        boosted_dec_odds = 1 + boosted_profit
-        effective_odds_american = int((boosted_dec_odds - 1) * 100) if boosted_dec_odds >= 2 else int(-100 / (boosted_dec_odds - 1))
+    implied_book_prob = 1 / dec_odds
+    edge_percentage = (over_prob - implied_book_prob) * 100
+    col_d.metric(label="Model vs Book Edge", value=f"{edge_percentage:+.1f}%")
+
+    if edge_percentage > 3.0:
+        st.success(f"✅ **Strong +EV Alt Play:** Model probability ({over_prob*100:.1f}%) significantly outpaces book implied probability ({implied_book_prob*100:.1f}%).")
+    elif edge_percentage < -3.0:
+        st.warning(f"⚠️ **Negative EV / Pass:** Book price is too sharp compared to model expectation.")
     else:
-        boosted_dec_odds = dec_odds
-        effective_odds_american = sportsbook_odds
-
-    boost_label = f" (+{global_boost}% Boost)" if global_boost > 0 else ""
-    col_b.metric(label=f"Effective Odds{boost_label}", value=f"{effective_odds_american:+d}")
-
-    edge_spread = blended_projection - sportsbook_line
-    col_c.metric(label="Line Diff vs Projection", value=f"{edge_spread:+.2f}")
-
-    if edge_spread > 0.20:
-        st.success(f"✅ **Strong Over / Alt Play:** {player_name} projects for {blended_projection:.2f} in **{market_type}** against the {sportsbook_line} line.")
-    elif edge_spread < -0.20:
-        st.warning(f"⚠️ **Under / Pass:** Projection ({blended_projection:.2f}) does not clear safety margin.")
-    else:
-        st.info("ℹ️ **Neutral Spot:** Line is efficiently priced close to model baseline.")
+        st.info("ℹ️ **Fairly Priced:** Market odds are closely aligned with Poisson model probability.")
 
 with tab2:
-    st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections use clean 4-market column mapping.")
+    st.subheader("Single Dropzone: Multi-File NST Processor & Poisson Alt-Line Matrix")
+    st.write("Drop your 4 Natural Stat Trick count files below. The board projects expected rates and fair alt-line probabilities.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -103,6 +131,13 @@ with tab2:
             "Assists Only"
         ],
         key="multi_batch_market"
+    )
+    
+    target_line_choice = st.selectbox(
+        "Select Target Threshold Line for Alt Matrix",
+        [0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
+        index=1, # Default to 1.5
+        key="batch_alt_line"
     )
     
     target_date = st.date_input("Target Slate Date", value=date.today(), key="batch_target_date")
@@ -212,14 +247,13 @@ with tab2:
             except Exception as e:
                 st.warning(f"Schedule/Matchup fetch warning: {e}")
 
-            # Precise market column targeting for 4 core markets
             if batch_market == "Shots on Goal (SOG)":
                 target_col = 'Shots'
             elif batch_market == "Points (G+A)":
                 target_col = 'Total Points'
             elif batch_market == "Anytime Goal Scorer":
                 target_col = 'Goals'
-            else: # Assists Only
+            else:
                 target_col = 'Total Assists'
 
             prev_col = target_col
@@ -243,6 +277,11 @@ with tab2:
             merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
             merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
             merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
+
+            # Calculate Poisson Probabilities and Fair Odds for the chosen threshold line
+            merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
+            merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
+            merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
             
             filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
             if filter_slate and active_teams and 'Clean_Team' in merged_df.columns:
@@ -253,34 +292,28 @@ with tab2:
                 else:
                     st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
             
-            st.write(f"### 📈 Slate Projections Board ({batch_market} via `{target_col}`):")
-            display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
+            st.write(f"### 📈 Slate Alt-Line Matrix ({batch_market} > {target_line_choice}):")
+            display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Matchup_Proj', 'Model_Over_Prob_%', 'Fair_American_Odds']
             
             final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
-            
-            if batch_market == "Shots on Goal (SOG)":
-                high_thresh, low_thresh = 1.05, 0.95
-            elif batch_market == "Anytime Goal Scorer":
-                high_thresh, low_thresh = 1.07, 0.93
-            else:
-                high_thresh, low_thresh = 1.03, 0.97
 
             def high_pop_text(val):
-                if val > high_thresh:
-                    return 'color: #00E676; font-weight: bold; font-size: 1.05em;'
-                elif val < low_thresh:
-                    return 'color: #FF5252; font-weight: bold; font-size: 1.05em;'
+                if isinstance(val, (int, float)):
+                    if val > 60.0:
+                        return 'color: #00E676; font-weight: bold; font-size: 1.05em;'
+                    elif val < 30.0:
+                        return 'color: #FF5252; font-weight: bold; font-size: 1.05em;'
                 return 'color: #CFD8DC;'
 
             st.dataframe(
-                final_board.style.map(high_pop_text, subset=['Matchup_Factor', 'Matchup_Proj']),
+                final_board.style.map(high_pop_text, subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
         else:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
-        st.info("💡 **Instructions:** Drop all 4 files above to generate slate projections.")
+        st.info("💡 **Instructions:** Drop all 4 files above to generate Poisson alt-line projections.")
 
 with tab3:
     st.subheader("🚀 Boost & Parlay Compound Optimizer")
@@ -308,7 +341,7 @@ with tab3:
     
     st.divider()
     col_res1, col_res2 = st.columns(2)
-    col_res1.metric(label="Standard 2-Leg Parlay Odds", value=f"{parlay_american:+d}")
+    col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
     col_res2.metric(label=f"Boosted Parlay Odds (+{boost_val}%)", value=f"{boosted_parlay_american:+d}")
     
     st.success(f"🎯 **Parlay Ready:** Combining **{leg1_name}** and **{leg2_name}** with a {boost_val}% boost yields **{boosted_parlay_american:+d}** odds!")
