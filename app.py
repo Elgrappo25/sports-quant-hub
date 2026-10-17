@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, market-tailored defensive matchup factors, and high-pop text styling.")
+st.markdown("### Count-based scaling, market-tailored matchup factors, and opponent game tags.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections use **market-tailored matchup factors** (SOG vs Goals vs PPP).")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections include **opponent tags** and market-tailored factors.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -169,6 +169,8 @@ with tab2:
 
             active_teams = set()
             team_matchup_factors = {}
+            team_opponents = {} # maps team abbrev to their opponent's abbrev for tonight
+            
             try:
                 sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
                 sched_resp = requests.get(sched_url).json()
@@ -177,14 +179,13 @@ with tab2:
                 if curr_team_df is not None and 'Team' in curr_team_df.columns:
                     curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
                     
-                    # Select specific defensive column based on active market type
                     if batch_market == "Shots on Goal (SOG)":
                         stat_col = 'CA' if 'CA' in curr_team_df.columns else 'FA'
                     elif batch_market in ["Anytime Goal Scorer"]:
-                        stat_col = 'HDCF' if 'HDCF' in curr_team_df.columns else 'CA' # High danger or fallback
+                        stat_col = 'HDCF' if 'HDCF' in curr_team_df.columns else 'CA'
                     elif batch_market == "Power-Play Points (PPP)":
                         stat_col = 'Minor' if 'Minor' in curr_team_df.columns else 'Total Penalties'
-                    else: # Points & Assists
+                    else:
                         stat_col = 'SCF' if 'SCF' in curr_team_df.columns else 'CA'
                         
                     mean_val = curr_team_df[stat_col].mean() if stat_col in curr_team_df.columns else 1.0
@@ -204,6 +205,9 @@ with tab2:
                             if home_abbrev: active_teams.add(home_abbrev)
                             
                             if away_abbrev and home_abbrev:
+                                team_opponents[away_abbrev] = f"@{home_abbrev}" # away team plays @ home team
+                                team_opponents[home_abbrev] = f"vs {away_abbrev}" # home team plays vs away team
+                                
                                 away_factor = team_stat_dict.get(home_abbrev, 1.0)
                                 home_factor = team_stat_dict.get(away_abbrev, 1.0)
                                 team_matchup_factors[away_abbrev] = away_factor
@@ -236,18 +240,19 @@ with tab2:
                 
                 merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
+                merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
                 
                 filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
                 if filter_slate and active_teams and 'Clean_Team' in merged_df.columns:
                     filtered_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
                     if len(filtered_df) > 0:
                         merged_df = filtered_df
-                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date} using **{batch_market} tailored matchup metrics**.")
+                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
                     else:
                         st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
                 
                 st.write(f"### 📈 Slate Projections Board ({batch_market}):")
-                display_cols = ['Player', 'Clean_Team', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
+                display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Blended_Proj', 'Matchup_Factor', 'Matchup_Proj']
                 
                 final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
                 
