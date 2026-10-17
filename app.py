@@ -27,7 +27,7 @@ st.sidebar.divider()
 st.sidebar.header("🔌 Live Props & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
 available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "espnbet", "pinnacle"])
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"])
 
 # Helper functions for Poisson probability calculation
 def poisson_prob(lam, k):
@@ -71,18 +71,16 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
     st.subheader("Automated +EV Slate Scanner & Line-Shopper")
-    st.write("Scans live book props across the entire slate and matches them against your Tab 2 model projections to surface +EV bets at the top.")
+    st.write("Scans live book props across standard & alternate endpoints to capture FanDuel & all books, matching them against your Tab 2 model projections.")
     
     col_m1, col_m2 = st.columns([2, 1])
     api_market_choice = col_m1.selectbox(
         "Select Target Prop Market to Scan",
         [
-            "player_shots_on_goal", 
             "player_points", 
+            "player_shots_on_goal", 
             "player_goals", 
-            "player_assists",
-            "player_shots_on_goal_alternate",
-            "player_points_alternate"
+            "player_assists"
         ],
         format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
     )
@@ -101,13 +99,15 @@ with tab1:
                     events_list = events_resp.json()
                     books_str = ",".join(selected_books)
                     
+                    # Automatically query BOTH standard and alternate endpoints to capture FanDuel and all books seamlessly
+                    markets_to_query = f"{api_market_choice},{api_market_choice}_alternate"
+                    
                     progress_bar = st.progress(0)
                     total_events = len(events_list)
                     
                     for idx, ev in enumerate(events_list):
                         ev_id = ev['id']
-                        # Strictly query US region feed for seamless book collection including FanDuel
-                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={api_market_choice}&bookmakers={books_str}"
+                        prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={markets_to_query}&bookmakers={books_str}"
                         resp = requests.get(prop_url, timeout=6)
                         if resp.status_code == 200:
                             game_data = resp.json()
@@ -126,7 +126,7 @@ with tab1:
                         progress_bar.progress((idx + 1) / total_events)
                     
                     st.session_state['master_prop_slate'] = all_prop_rows
-                    st.success(f"🟢 Successfully scanned all games! Found {len(all_prop_rows)} prop lines.")
+                    st.success(f"🟢 Successfully scanned all games! Found {len(all_prop_rows)} combined prop lines.")
                 else:
                     st.warning(f"⚠️ API Error: Status {events_resp.status_code}")
             except Exception as e:
@@ -137,12 +137,11 @@ with tab1:
     if all_prop_rows:
         master_df = pd.DataFrame(all_prop_rows)
         
-        # AIRTIGHT MAIN LINE FILTERING
-        if "alternate" not in api_market_choice:
-            if "shots_on_goal" in api_market_choice:
-                master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
-            elif any(m in api_market_choice for m in ["points", "goals", "assists"]):
-                master_df = master_df[master_df['Line'] == 0.5]
+        # AIRTIGHT MAIN LINE FILTERING (Ensures clean lines regardless of endpoint source)
+        if "shots_on_goal" in api_market_choice:
+            master_df = master_df[master_df['Line'].isin([1.5, 2.5, 3.5])]
+        elif any(m in api_market_choice for m in ["points", "goals", "assists"]):
+            master_df = master_df[master_df['Line'] == 0.5]
 
         # Merge with Tab 2 model data based on selected market category
         if 'raw_player_dfs' in st.session_state:
@@ -477,6 +476,6 @@ with tab3:
     st.divider()
     col_res1, col_res2 = st.columns(2)
     col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
-    col_res2.metric(label="Boosted Parlay Odds (+" + str(boost_val) + "%)", value=f"{boosted_parlay_american:+d}")
+    col_res2.metric(label="Boosted Parlay Odds (+" + str(boosted_parlay_american) + "%)", value=f"{boosted_parlay_american:+d}")
     
     st.success("🎯 **Parlay Ready:** Combining **" + leg1_name + "** and **" + leg2_name + "** with a " + str(boost_val) + "% boost yields **" + str(boosted_parlay_american) + "** odds!")
