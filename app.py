@@ -6,7 +6,7 @@ from datetime import date
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based per-game scaling, robust opponent matchup adjustments, and conditional color-coding.")
+st.markdown("### Count-based per-game scaling, market-adaptive matchup thresholds, and high-pop text styling.")
 
 # Sidebar for global settings
 st.sidebar.header("⚙️ Global Model Settings")
@@ -95,7 +95,7 @@ with tab1:
 
 with tab2:
     st.subheader("Single Dropzone: Multi-File NST Processor & Slate Matcher")
-    st.write("Drop your 4 Natural Stat Trick count files below. Projections include robust opponent matchup factors and color coding.")
+    st.write("Drop your 4 Natural Stat Trick count files below. Projections include market-adaptive thresholds and high-pop text styling.")
     
     batch_market = st.selectbox(
         "Select Target Prop Market", 
@@ -137,7 +137,6 @@ with tab2:
                     prev_team_df = temp_df
                 
         if curr_player_df is not None and prev_player_df is not None:
-            # Team abbreviation normalization dictionaries
             nst_to_standard = {
                 'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ',
                 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET',
@@ -168,8 +167,6 @@ with tab2:
                 t = parts[-1]
                 return nst_to_standard.get(t, t)
 
-            curr_player_df['Clean_Team'] = curr_player_df['Team'].apply(clean_team)
-
             active_teams = set()
             team_matchup_factors = {}
             try:
@@ -185,7 +182,7 @@ with tab2:
                         ca_val = row.get('CA', mean_ca)
                         factor = ca_val / mean_ca if mean_ca > 0 else 1.0
                         if pd.notnull(t_abbrev):
-                            team_ga_dict[t_abbrev] = max(0.85, min(1.15, factor))
+                            team_ga_dict[t_abbrev] = max(0.80, min(1.20, factor))
 
                 for week_day in sched_resp.get("gameWeek", []):
                     if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
@@ -243,15 +240,23 @@ with tab2:
                 
                 final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
                 
-                def color_matchup(val):
-                    if val > 1.25:
-                        return 'background-color: rgba(46, 125, 50, 0.25)'
-                    elif val < 0.80:
-                        return 'background-color: rgba(198, 40, 40, 0.25)'
-                    return ''
+                # Market-adaptive thresholds for high-pop text styling (no background boxes)
+                if batch_market == "Shots on Goal (SOG)":
+                    high_thresh, low_thresh = 1.05, 0.95
+                elif batch_market in ["Goals/60", "Anytime Goal Scorer", "Power-Play Points (PPP)"]:
+                    high_thresh, low_thresh = 1.07, 0.93
+                else: # Points & Assists
+                    high_thresh, low_thresh = 1.03, 0.97
+
+                def high_pop_text(val):
+                    if val > high_thresh:
+                        return 'color: #00E676; font-weight: bold; font-size: 1.05em;' # Vibrant neon green
+                    elif val < low_thresh:
+                        return 'color: #FF5252; font-weight: bold; font-size: 1.05em;' # Vibrant neon red
+                    return 'color: #CFD8DC;' # Crisp soft slate text
 
                 st.dataframe(
-                    final_board.style.map(color_matchup, subset=['Matchup_Proj']),
+                    final_board.style.map(high_pop_text, subset=['Matchup_Factor', 'Matchup_Proj']),
                     use_container_width=True,
                     height=500
                 )
