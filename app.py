@@ -396,3 +396,150 @@ with tab2:
                 'WPG': 'WPG', 'WSH': 'WSH'
             }
             full_to_standard = {
+                'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF',
+                'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY',
+                'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL',
+                'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA',
+                'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL',
+                'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI',
+                'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI',
+                'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
+                'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
+                'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK',
+                'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
+            }
+
+            def clean_team(team_str):
+                if pd.isna(team_str):
+                    return 'UNK'
+                parts = [p.strip() for p in str(team_str).split(',')]
+                t = parts[-1]
+                return nst_to_standard.get(t, t)
+
+            active_teams = set()
+            team_matchup_factors = {}
+            team_opponents = {}
+            
+            try:
+                sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
+                sched_resp = requests.get(sched_url).json()
+                
+                if curr_team_df is not None and 'Team' in curr_team_df.columns:
+                    curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(full_to_standard)
+                    
+                    if batch_market == "Shots on Goal (SOG)":
+                        candidates = ['SA', 'CA', 'FA']
+                    elif batch_market == "Anytime Goal Scorer":
+                        candidates = ['HDCA', 'HDCF', 'CA']
+                    else:
+                        candidates = ['SCA', 'SCF', 'CA']
+                        
+                    stat_col = next((c for c in candidates if c in curr_team_df.columns), 'CA')
+                    curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
+                        
+                    mean_val = curr_team_df[stat_col].mean() if stat_col in curr_team_df.columns else 1.0
+                    for _, row in curr_team_df.iterrows():
+                        t_abbrev = row['Standard_Abbrev']
+                        val = row.get(stat_col, mean_val)
+                        factor = val / mean_val if mean_val > 0 else 1.0
+                        if pd.notnull(t_abbrev):
+                            team_matchup_factors[t_abbrev] = max(0.80, min(1.20, factor))
+
+                for week_day in sched_resp.get("gameWeek", []):
+                    if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
+                        for game in week_day.get("games", []):
+                            away_abbrev = game.get("awayTeam", {}).get("abbrev")
+                            home_abbrev = game.get("homeTeam", {}).get("abbrev")
+                            if away_abbrev: active_teams.add(away_abbrev)
+                            if home_abbrev: active_teams.add(home_abbrev)
+                            
+                            if away_abbrev and home_abbrev:
+                                team_opponents[away_abbrev] = f"@{home_abbrev}"
+                                team_opponents[home_abbrev] = f"vs {away_abbrev}"
+            except Exception as e:
+                st.warning(f"Schedule/Matchup fetch warning: {e}")
+
+            if batch_market == "Shots on Goal (SOG)":
+                target_col = 'Shots'
+            elif batch_market == "Points (G+A)":
+                target_col = 'Total Points'
+            elif batch_market == "Anytime Goal Scorer":
+                target_col = 'Goals'
+            else:
+                target_col = 'Total Assists'
+
+            prev_col = target_col
+
+            st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
+
+            merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+            merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
+            
+            merged_df['Stat_curr'] = pd.to_numeric(merged_df[f'{target_col}_curr'], errors='coerce').fillna(0)
+            merged_df['Stat_prev'] = pd.to_numeric(merged_df[f'{prev_col}_prev'], errors='coerce').fillna(0)
+            
+            gp_prev = pd.to_numeric(merged_df.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
+            gp_curr = pd.to_numeric(merged_df.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
+            
+            merged_df = merged_df[gp_curr >= min_gp].copy()
+            
+            merged_df['Baseline_Stat'] = merged_df['Stat_prev'] / gp_prev
+            merged_df['Current_Stat'] = merged_df['Stat_curr'] / gp_curr
+            
+            merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+            
+            merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
+            merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
+            merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
+
+            merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
+            merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
+            merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
+            
+            filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
+            if filter_slate and active_teams and 'Clean_Team' in merged_df.columns:
+                filtered_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
+                if len(filtered_df) > 0:
+                    merged_df = filtered_df
+                    st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
+                else:
+                    st.info("ℹ️ Showing full player pool (team abbreviation mismatch with API).")
+            
+            st.write(f"### 📈 Slate Alt-Line Matrix ({batch_market} > {target_line_choice}):")
+            display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Matchup_Factor', 'Matchup_Proj', 'Model_Over_Prob_%', 'Fair_American_Odds']
+            
+            final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
+
+            def color_matrix_cells(val, col_name):
+                if isinstance(val, (int, float)):
+                    if col_name == 'Matchup_Factor':
+                        if val > 1.05:
+                            return 'color: #00E676; font-weight: bold;'
+                        elif val < 0.95:
+                            return 'color: #FF5252; font-weight: bold;'
+                    elif col_name == 'Model_Over_Prob_%':
+                        if batch_market == "Anytime Goal Scorer":
+                            green_thresh, red_thresh = 42.0, 32.0
+                        elif batch_market == "Points (G+A)":
+                            green_thresh, red_thresh = (72.0 if target_line_choice <= 0.5 else 45.0), 50.0
+                        elif batch_market == "Assists Only":
+                            green_thresh, red_thresh = (65.0 if target_line_choice <= 0.5 else 40.0), 45.0
+                        else:
+                            green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
+                            
+                        if val >= green_thresh:
+                            return 'color: #00E676; font-weight: bold;'
+                        elif val <= red_thresh:
+                            return 'color: #FF5252; font-weight: bold;'
+                return 'color: #CFD8DC;'
+
+            st.dataframe(
+                final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                use_container_width=True,
+                height=500
+            )
+        else:
+            st.warning("Please upload both Player Season Total CSV files.")
+    else:
+        st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
