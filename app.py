@@ -62,7 +62,7 @@ global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min
 st.sidebar.divider()
 st.sidebar.header("🔌 Live Props & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
-available_books = ["draftkings", "fanduel", "betmgm", "betrivers", "espnbet", "bet365", "pinnacle"]
+available_books = ["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"]
 selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"])
 
 # Helper functions for Poisson probability calculation
@@ -126,7 +126,7 @@ with tab1:
                             game_data = resp.json()
                             for bookmaker in game_data.get('bookmakers', []):
                                 b_title = bookmaker['title']
-                                for market in game_data.get('markets', []):
+                                for market in bookmaker.get('markets', []):
                                     for outcome in market.get('outcomes', []):
                                         if outcome.get('name') == 'Over':
                                             all_prop_rows.append({
@@ -299,7 +299,6 @@ with tab1:
                     slip_summary = []
                     
                     for idx, row in checked_rows.iterrows():
-                        # Retrieve original decimal odds from merged_scan using player & sportsbook match
                         original_match = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (merged_scan['Line'] == row['Line'])]
                         if len(original_match) > 0:
                             dec = original_match.iloc[0]['Decimal Odds']
@@ -546,7 +545,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
