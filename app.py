@@ -17,11 +17,10 @@ st.markdown("""
 st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
 
-# Navigation Tabs placed early so we can read market choice for sidebar defaults
-tab1, tab2, tab3 = st.tabs([
-    "📊 Automated +EV Prop Scanner", 
-    "📁 Multi-File NST Uploader & Market Matrix", 
-    "🚀 Boost & Parlay Optimizer"
+# Streamlined Navigation Tabs (2 Tabs total now)
+tab1, tab2 = st.tabs([
+    "📊 Automated +EV Prop Scanner & Slip Builder", 
+    "📁 Multi-File NST Uploader & Market Matrix"
 ])
 
 with tab1:
@@ -98,7 +97,6 @@ def decimal_to_american(dec):
         val = int(-100 / (dec - 1))
         return f"{val}"
 
-# Clean sportsbook title map to handle ESPN BET / theScore Bet mapping cleanly
 def clean_book_title(title):
     if "theScore" in title or "ESPN" in title:
         return "ESPN BET / theScore Bet"
@@ -269,12 +267,11 @@ with tab1:
                 m2.metric("Sweet Spot Opportunities", pos_ev_count)
                 m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
                 
-                st.write("### 🎯 Slate +EV Market Comparison Board (Check rows to build slip):")
+                st.write("### 🎯 Slate +EV Market Comparison Board:")
                 
-                # Prepare display dataframe with an interactive checkbox column ('Select')
+                # TABLE 1: COLOR-CODED STANDARD DATAFRAME (No side-scrolling, perfect formatting)
                 display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
-                display_scan.insert(0, 'Select', False)
-                display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
+                display_scan.rename(columns={'Matchup_Proj': 'Proj Rate', 'Model Over (%)': 'Model Over', 'Edge (%)': 'Edge %'}, inplace=True)
                 
                 def color_edge(val):
                     if val >= 5.0:
@@ -282,18 +279,31 @@ with tab1:
                     elif val < 0.0:
                         return 'color: #FF5252;'
                     return 'color: #CFD8DC;'
-                
-                # Render interactive data editor so user can check boxes directly in the table
-                edited_df = st.data_editor(
-                    display_scan,
-                    column_config={"Select": st.column_config.CheckboxColumn("Select", required=True)},
-                    disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate (λ)', 'Model Over (%)', 'Fair Odds', 'Edge (%)'],
+                    
+                st.dataframe(
+                    display_scan.style.map(color_edge, subset=['Edge %']),
                     use_container_width=True,
-                    height=400,
-                    key="slate_editor"
+                    height=350
                 )
                 
-                # Extract checked rows for live parlay & boost calculation
+                st.divider()
+                st.subheader("📋 Build Parlay Slip & Apply Boost")
+                st.write("Select checkboxes from the interactive table below to instantly calculate your compound parlay odds and boost value.")
+                
+                # TABLE 2: INTERACTIVE CHECKBOX SELECTOR FOR SLIP BUILDING
+                picker_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
+                picker_scan.insert(0, 'Select', False)
+                picker_scan.rename(columns={'Matchup_Proj': 'Proj Rate', 'Model Over (%)': 'Model Over', 'Edge (%)': 'Edge %'}, inplace=True)
+                
+                edited_df = st.data_editor(
+                    picker_scan,
+                    column_config={"Select": st.column_config.CheckboxColumn("Select", required=True)},
+                    disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate', 'Model Over', 'Fair Odds', 'Edge %'],
+                    use_container_width=True,
+                    height=300,
+                    key="slate_editor_slip"
+                )
+                
                 checked_rows = edited_df[edited_df['Select'] == True]
                 
                 if len(checked_rows) > 0:
@@ -317,17 +327,15 @@ with tab1:
                                 "Player": row['Player'],
                                 "Line": row['Line'],
                                 "Odds": row['Odds'],
-                                "Model Win Prob": f"{row['Model Over (%)']}%",
-                                "Edge": f"+{row['Edge (%)']}%"
+                                "Model Win Prob": f"{row['Model Over']}%",
+                                "Edge": f"+{row['Edge %']}%"
                             })
                             
                     st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
                     
-                    # Parlay American Odds Calculation
                     parlay_american = int((combined_dec - 1) * 100) if combined_dec >= 2 else int(-100 / (combined_dec - 1))
                     parlay_american_str = f"+{parlay_american}" if parlay_american > 0 else f"{parlay_american}"
                     
-                    # Boosted Odds Calculation
                     profit_factor = combined_dec - 1
                     boosted_dec = 1 + (profit_factor * (1 + (global_boost / 100)))
                     boosted_american = int((boosted_dec - 1) * 100) if boosted_dec >= 2 else int(-100 / (boosted_dec - 1))
@@ -559,34 +567,3 @@ with tab2:
             st.warning("Please upload both Player Season Total CSV files.")
     else:
         st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
-
-with tab3:
-    st.subheader("🚀 Standalone Boost & Parlay Compound Optimizer")
-    st.write("Test multi-leg slips and profit boosts manually if you prefer typing legs out.")
-    
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        leg1_name = st.text_input("Leg 1 Player / Prop", value="McDavid Over 0.5 Assists", key="t3_l1_name")
-        leg1_odds = st.number_input("Leg 1 American Odds", value=-110, step=5, key="t3_l1_odds")
-    with col_p2:
-        leg2_name = st.text_input("Leg 2 Player / Prop", value="Draisaitl Over 0.5 Points", key="t3_l2_name")
-        leg2_odds = st.number_input("Leg 2 American Odds", value=130, step=5, key="t3_l2_odds")
-        
-    dec1 = 1 + (leg1_odds / 100) if leg1_odds > 0 else 1 + (100 / abs(leg1_odds))
-    dec2 = 1 + (leg2_odds / 100) if leg2_odds > 0 else 1 + (100 / abs(leg2_odds))
-    
-    combined_parlay_dec = dec1 * dec2
-    parlay_american = int((combined_parlay_dec - 1) * 100) if combined_parlay_dec >= 2 else int(-100 / (combined_parlay_dec - 1))
-    
-    boost_val = st.number_input("Apply Profit Boost to Parlay (%)", min_value=0, max_value=100, value=30, step=5, key="t3_boost")
-    
-    profit_factor = combined_parlay_dec - 1
-    boosted_parlay_dec = 1 + (profit_factor * (1 + (boost_val / 100)))
-    boosted_parlay_american = int((boosted_parlay_dec - 1) * 100) if boosted_parlay_dec >= 2 else int(-100 / (boosted_parlay_dec - 1))
-    
-    st.divider()
-    col_res1, col_res2 = st.columns(2)
-    col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
-    col_res2.metric(label="Boosted Parlay Odds (+" + str(boost_val) + "%)", value=f"{boosted_parlay_american:+d}")
-    
-    st.success("🎯 **Parlay Ready:** Combining **" + leg1_name + "** and **" + leg2_name + "** with a " + str(boost_val) + "% boost yields **" + str(boosted_parlay_american) + "** odds!")
