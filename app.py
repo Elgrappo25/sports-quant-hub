@@ -62,8 +62,8 @@ global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min
 st.sidebar.divider()
 st.sidebar.header("🔌 Live Props & Line Shopping")
 api_key_input = st.sidebar.text_input("Odds API Key", type="password", placeholder="Enter your API key here...")
-available_books = ["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle"])
+available_books = ["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "espnbet", "pinnacle"]
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle", "espnbet"])
 
 # Helper functions for Poisson probability calculation
 def poisson_prob(lam, k):
@@ -98,6 +98,12 @@ def decimal_to_american(dec):
         val = int(-100 / (dec - 1))
         return f"{val}"
 
+# Clean sportsbook title map to handle ESPN BET / theScore Bet mapping cleanly
+def clean_book_title(title):
+    if "theScore" in title or "ESPN" in title:
+        return "ESPN BET / theScore Bet"
+    return title
+
 with tab1:
     fetch_all_btn = col_m2.button("🔄 Scan Slate & Calculate +EV", use_container_width=True)
     
@@ -125,7 +131,7 @@ with tab1:
                         if resp.status_code == 200:
                             game_data = resp.json()
                             for bookmaker in game_data.get('bookmakers', []):
-                                b_title = bookmaker['title']
+                                b_title = clean_book_title(bookmaker['title'])
                                 for market in bookmaker.get('markets', []):
                                     for outcome in market.get('outcomes', []):
                                         if outcome.get('name') == 'Over':
