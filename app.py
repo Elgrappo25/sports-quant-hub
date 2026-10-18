@@ -17,7 +17,7 @@ st.markdown("""
 st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
 
-# Streamlined Navigation Tabs (2 Tabs total now)
+# Streamlined Navigation Tabs (2 Tabs total)
 tab1, tab2 = st.tabs([
     "📊 Automated +EV Prop Scanner & Slip Builder", 
     "📁 Multi-File NST Uploader & Market Matrix"
@@ -220,7 +220,7 @@ with tab1:
                     return poisson_over_prob(row['Matchup_Proj'], row['Line'])
                     
                 merged_scan['Model_Over_Prob'] = merged_scan.apply(calc_row_prob, axis=1)
-                merged_scan['Model Over (%)'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
+                merged_scan['Model Over'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
                 merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
                 
                 def calc_edge(row):
@@ -229,11 +229,11 @@ with tab1:
                     implied = 1.0 / dec
                     return round((row['Model_Over_Prob'] - implied) * 100, 1)
                     
-                merged_scan['Edge (%)'] = merged_scan.apply(calc_edge, axis=1)
+                merged_scan['Edge %'] = merged_scan.apply(calc_edge, axis=1)
                 
                 # Apply sidebar edge range filters
-                merged_scan = merged_scan[(merged_scan['Edge (%)'] >= min_edge_filter) & (merged_scan['Edge (%)'] <= max_edge_filter)]
-                merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
+                merged_scan = merged_scan[(merged_scan['Edge %'] >= min_edge_filter) & (merged_scan['Edge %'] <= max_edge_filter)]
+                merged_scan = merged_scan.sort_values(by='Edge %', ascending=False).reset_index(drop=True)
                 
                 st.divider()
                 
@@ -260,50 +260,40 @@ with tab1:
                 
                 # Summary Metrics Bar based on current filters
                 pos_ev_count = len(merged_scan)
-                top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
+                top_edge = merged_scan['Edge %'].max() if len(merged_scan) > 0 else 0.0
                 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Filtered Props in View", len(merged_scan))
                 m2.metric("Sweet Spot Opportunities", pos_ev_count)
                 m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
                 
-                st.write("### 🎯 Slate +EV Market Comparison Board:")
+                st.write("### 🎯 Master Slate Comparison & Checkbox Slip Builder:")
+                st.write("Check the boxes on the left to build your parlay slip instantly at the bottom.")
                 
-                # TABLE 1: COLOR-CODED STANDARD DATAFRAME (No side-scrolling, perfect formatting)
-                display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
-                display_scan.rename(columns={'Matchup_Proj': 'Proj Rate', 'Model Over (%)': 'Model Over', 'Edge (%)': 'Edge %'}, inplace=True)
+                # Prepare display dataframe with clean rounded numbers and Checkbox column
+                display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over', 'Fair Odds', 'Edge %']].copy()
+                display_scan.insert(0, 'Select', False)
                 
-                def color_edge(val):
-                    if val >= 5.0:
-                        return 'color: #00E676; font-weight: bold;'
-                    elif val < 0.0:
-                        return 'color: #FF5252;'
-                    return 'color: #CFD8DC;'
-                    
-                st.dataframe(
-                    display_scan.style.map(color_edge, subset=['Edge %']),
-                    use_container_width=True,
-                    height=350
-                )
+                # Clean decimal formatting for readability
+                display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
+                display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
+                display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
+                display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
+                display_scan.drop(columns=['Matchup_Proj'], inplace=True)
                 
-                st.divider()
-                st.subheader("📋 Build Parlay Slip & Apply Boost")
-                st.write("Select checkboxes from the interactive table below to instantly calculate your compound parlay odds and boost value.")
-                
-                # TABLE 2: INTERACTIVE CHECKBOX SELECTOR FOR SLIP BUILDING
-                picker_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
-                picker_scan.insert(0, 'Select', False)
-                picker_scan.rename(columns={'Matchup_Proj': 'Proj Rate', 'Model Over (%)': 'Model Over', 'Edge (%)': 'Edge %'}, inplace=True)
+                # Reorder columns cleanly
+                display_scan = display_scan[['Select', 'Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate', 'Model Over', 'Fair Odds', 'Edge %']]
                 
                 edited_df = st.data_editor(
-                    picker_scan,
+                    display_scan,
                     column_config={"Select": st.column_config.CheckboxColumn("Select", required=True)},
                     disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate', 'Model Over', 'Fair Odds', 'Edge %'],
                     use_container_width=True,
-                    height=300,
-                    key="slate_editor_slip"
+                    height=450,
+                    key="master_slate_editor"
                 )
                 
+                # Extract checked rows for live parlay & boost calculation
                 checked_rows = edited_df[edited_df['Select'] == True]
                 
                 if len(checked_rows) > 0:
@@ -315,7 +305,7 @@ with tab1:
                     slip_summary = []
                     
                     for idx, row in checked_rows.iterrows():
-                        original_match = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (merged_scan['Line'] == row['Line'])]
+                        original_match = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (abs(merged_scan['Line'] - float(row['Line'])) < 0.1)]
                         if len(original_match) > 0:
                             dec = original_match.iloc[0]['Decimal Odds']
                             prob = original_match.iloc[0]['Model_Over_Prob']
@@ -327,8 +317,8 @@ with tab1:
                                 "Player": row['Player'],
                                 "Line": row['Line'],
                                 "Odds": row['Odds'],
-                                "Model Win Prob": f"{row['Model Over']}%",
-                                "Edge": f"+{row['Edge %']}%"
+                                "Model Win Prob": row['Model Over'],
+                                "Edge": row['Edge %']
                             })
                             
                     st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
@@ -559,7 +549,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
