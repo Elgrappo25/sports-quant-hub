@@ -96,7 +96,7 @@ def decimal_to_american(dec):
 
 def clean_book_title(title):
     if "theScore" in title or "ESPN" in title:
-        return "ESPN BET / theScore Bet"
+        return "ESPN BET"
     return title
 
 with tab1:
@@ -273,7 +273,12 @@ with tab1:
                 
                 edited_df = st.data_editor(
                     display_scan,
-                    column_config={"Select": st.column_config.CheckboxColumn("Select", required=True)},
+                    column_config={
+                        "Select": st.column_config.CheckboxColumn("Select", required=True),
+                        "Matchup": st.column_config.TextColumn("Matchup", width="medium"),
+                        "Sportsbook": st.column_config.TextColumn("Sportsbook", width="small"),
+                        "Player": st.column_config.TextColumn("Player", width="small"),
+                    },
                     disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate', 'Model Over', 'Fair Odds', 'Edge %'],
                     use_container_width=True,
                     height=450,
@@ -535,7 +540,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
