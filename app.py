@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import math
 from datetime import date
+import itertools
 
 st.set_page_config(page_title="Sports Quant Hub - NHL Pro Terminal", page_icon="🏒", layout="wide")
 
@@ -15,7 +16,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
-st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and market-tailored color coding.")
+st.markdown("### Count-based scaling, Poisson math, live Odds API line-shopping, and automated +EV parlay generation.")
 
 tab1, tab2 = st.tabs([
     "📊 Automated +EV Prop Scanner & Slip Builder", 
@@ -371,6 +372,94 @@ with tab1:
                         st.success(f"🟢 **Profitable Compound Edge:** This checked parlay slip holds a **+{slip_edge}% mathematical edge** over the sportsbook!")
                     else:
                         st.warning(f"⚠️ **Negative Edge:** This checked combination carries a house disadvantage. Try unchecking or swapping legs.")
+
+                # ==========================================
+                # NEW: AUTOMATED SAME-BOOK PARLAY GENERATOR
+                # ==========================================
+                st.divider()
+                st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
+                st.write("Automatically groups positive-EV legs by sportsbook and ranks the highest compound edge parlays on the board.")
+                
+                auto_col1, auto_col2, auto_col3 = st.columns(3)
+                parlay_mode = auto_col1.selectbox("Parlay Type", ["Same Game Parlay (SGP)", "Multi-Game Parlay (Independent)"])
+                parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3])
+                min_parlay_edge = auto_col3.slider("Min Parlay Edge (%)", min_value=0.0, max_value=25.0, value=3.0, step=0.5)
+                
+                generate_parlays_btn = st.button("⚡ Generate Top Automated Parlays", use_container_width=True)
+                
+                if generate_parlays_btn:
+                    generated_slips = []
+                    
+                    # Group filtered scan by individual Sportsbook
+                    for book_name, book_df in merged_scan.groupby("Sportsbook"):
+                        if len(book_df) < parlay_legs_count:
+                            continue
+                        
+                        # Generate combinations of desired leg count from this book
+                        for combo in itertools.combinations(book_df.iterrows(), parlay_legs_count):
+                            combo_rows = [item[1] for item in combo]
+                            
+                            # Check SGP vs Multi-Game constraint
+                            if "Same Game Parlay" in parlay_mode:
+                                match_set = {r['Matchup'] for r in combo_rows}
+                                if len(match_set) > 1:
+                                    continue # Skip if legs belong to different games
+                                # Prevent picking multiple props for the exact same player in the same parlay
+                                player_set = {r['Player'] for r in combo_rows}
+                                if len(player_set) < parlay_legs_count:
+                                    continue
+                            else:
+                                # Multi-game mode: ensure legs are from distinct matchups to avoid correlation violation
+                                match_set = {r['Matchup'] for r in combo_rows}
+                                if len(match_set) < parlay_legs_count:
+                                    continue
+                                player_set = {r['Player'] for r in combo_rows}
+                                if len(player_set) < parlay_legs_count:
+                                    continue
+
+                            # Calculate compound odds and probabilities
+                            comb_dec = 1.0
+                            comb_prob = 1.0
+                            leg_descriptions = []
+                            
+                            for r in combo_rows:
+                                comb_dec *= r['Decimal Odds']
+                                comb_prob *= r['Model_Over_Prob']
+                                leg_descriptions.append(f"{r['Player']} O{r['Line']} ({r['Odds']})")
+                            
+                            # Apply SGP correlation haircut if SGP mode is active (e.g., 15% probability haircut for book house tax)
+                            if "Same Game Parlay" in parlay_mode:
+                                comb_prob *= 0.85
+                                
+                            implied_p = 1.0 / comb_dec
+                            slip_e = round((comb_prob - implied_p) * 100, 1)
+                            
+                            if slip_e >= min_parlay_edge:
+                                # Calculate boosted payout
+                                p_factor = comb_dec - 1
+                                b_dec = 1 + (p_factor * (1 + (global_boost / 100)))
+                                b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
+                                b_str = f"+{b_am}" if b_am > 0 else f"{b_am}"
+                                std_am = int((comb_dec - 1) * 100) if comb_dec >= 2 else int(-100 / (comb_dec - 1))
+                                std_str = f"+{std_am}" if std_am > 0 else f"{std_am}"
+                                
+                                generated_slips.append({
+                                    "Sportsbook": book_name,
+                                    "Type": parlay_mode.split()[0],
+                                    "Legs": " + | + ".join(leg_descriptions),
+                                    "Standard Odds": std_str,
+                                    f"Boosted Odds (+{global_boost}%)": b_str,
+                                    "Model Prob": f"{round(comb_prob * 100, 1)}%",
+                                    "Compound Edge %": slip_e
+                                })
+                    
+                    if generated_slips:
+                        parlay_results_df = pd.DataFrame(generated_slips)
+                        parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
+                        st.success(f"🎉 Generated **{len(parlay_results_df)}** profitable automated parlays across your selected sportsbooks!")
+                        st.dataframe(parlay_results_df.head(10), use_container_width=True)
+                    else:
+                        st.warning("⚠️ No parlays found matching your criteria. Try lowering your min parlay edge or expanding your edge filters in the sidebar.")
         else:
             st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can correctly map stats for your selected market!")
             st.dataframe(master_df[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
@@ -576,7 +665,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
