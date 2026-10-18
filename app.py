@@ -94,7 +94,6 @@ def decimal_to_american(dec):
         val = int(-100 / (dec - 1))
         return f"{val}"
 
-# Comprehensive cleaning function for bookmakers
 def clean_book_title(title):
     t_lower = str(title).lower()
     if "espn" in t_lower or "score" in t_lower:
@@ -113,7 +112,6 @@ def clean_book_title(title):
         return "Pinnacle"
     return title.title()
 
-# Helper to shorten team names to 3-letter codes for compact matchup display
 team_to_abbrev = {
     'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF',
     'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY',
@@ -300,7 +298,6 @@ with tab1:
                 display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over', 'Fair Odds', 'Edge %']].copy()
                 display_scan.insert(0, 'Select', False)
                 
-                # Apply compact formatting to matchup and numbers
                 display_scan['Matchup'] = display_scan['Matchup'].apply(compact_matchup)
                 display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
                 display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
@@ -579,7 +576,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
