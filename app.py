@@ -48,7 +48,6 @@ min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_
 st.sidebar.divider()
 st.sidebar.header("🎯 Market-Tailored Edge Filters")
 
-# Automatically adjust recommended slider defaults based on the selected market in Tab 1
 if "shots_on_goal" in api_market_choice:
     default_min_edge, default_max_edge = 5.0, 15.0
 elif "goals" in api_market_choice:
@@ -120,6 +119,7 @@ with tab1:
                     
                     for idx, ev in enumerate(events_list):
                         ev_id = ev['id']
+                        matchup_str = f"{ev['away_team']} @ {ev['home_team']}"
                         prop_url = f"https://api.the-odds-api.com/v4/sports/icehockey_nhl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={markets_to_query}&bookmakers={books_str}"
                         resp = requests.get(prop_url, timeout=6)
                         if resp.status_code == 200:
@@ -130,6 +130,7 @@ with tab1:
                                     for outcome in market.get('outcomes', []):
                                         if outcome.get('name') == 'Over':
                                             all_prop_rows.append({
+                                                "Matchup": matchup_str,
                                                 "Sportsbook": b_title,
                                                 "Player": outcome.get('description').strip(),
                                                 "Line": float(outcome.get('point')),
@@ -230,25 +231,33 @@ with tab1:
                 merged_scan = merged_scan[(merged_scan['Edge (%)'] >= min_edge_filter) & (merged_scan['Edge (%)'] <= max_edge_filter)]
                 merged_scan = merged_scan.sort_values(by='Edge (%)', ascending=False).reset_index(drop=True)
                 
-                # Summary Metrics Bar
+                st.divider()
+                
+                # GAME SELECTOR & PLAYER SEARCH BAR COLUMNS
+                col_f1, col_f2 = st.columns(2)
+                
+                available_matchups = ["All Games (Full Slate)"] + sorted(merged_scan['Matchup'].unique().tolist())
+                selected_matchup = col_f1.selectbox("🏟️ Filter by Specific Game Matchup", available_matchups)
+                
+                if selected_matchup != "All Games (Full Slate)":
+                    merged_scan = merged_scan[merged_scan['Matchup'] == selected_matchup]
+                
+                search_query = col_f2.text_input("🔍 Search Player Name", placeholder="Type player name...").strip()
+                if search_query:
+                    merged_scan = merged_scan[merged_scan['Player'].str.contains(search_query, case=False, na=False)]
+                
+                # Summary Metrics Bar based on current filters
                 pos_ev_count = len(merged_scan)
                 top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Total Filtered Props", len(merged_scan))
-                m2.metric("Props in Target Sweet Spot", pos_ev_count)
-                m3.metric("Max Edge in Range", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
-                
-                st.divider()
-                
-                # INTERACTIVE PLAYER SEARCH BAR
-                search_query = st.text_input("🔍 Search Player Name", placeholder="Type player name (e.g., McDavid, Martone)...").strip()
-                if search_query:
-                    merged_scan = merged_scan[merged_scan['Player'].str.contains(search_query, case=False, na=False)]
+                m1.metric("Filtered Props in Matchup", len(merged_scan))
+                m2.metric("Sweet Spot Opportunities", pos_ev_count)
+                m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
                 
                 st.write("### 🎯 Slate +EV Market Comparison Board:")
                 
-                display_scan = merged_scan[['Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
+                display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
                 display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
                 
                 def color_edge(val):
@@ -265,7 +274,7 @@ with tab1:
                 )
         else:
             st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can correctly map stats for your selected market!")
-            st.dataframe(master_df[['Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
+            st.dataframe(master_df[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
     else:
         st.info("💡 **Instructions:** Select your target market above and click **Scan Slate & Calculate +EV** to pull live bookmaker props across all games.")
 
@@ -460,7 +469,7 @@ with tab2:
                         else:
                             green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
                             
-                        if val >= green_tech if 'green_tech' in locals() else val >= green_thresh:
+                        if val >= green_thresh:
                             return 'color: #00E676; font-weight: bold;'
                         elif val <= red_thresh:
                             return 'color: #FF5252; font-weight: bold;'
@@ -468,7 +477,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
@@ -506,4 +515,4 @@ with tab3:
     col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
     col_res2.metric(label="Boosted Parlay Odds (+" + str(boosted_parlay_american) + "%)", value=f"{boosted_parlay_american:+d}")
     
-    st.success("🎯 **Parlay Ready:** Combining **" + leg1_name + "** and **" + leg2_name + "** with a " + str(boost_val) + "% boost yields **" + str(boosted_parlay_american) + "** odds!")
+    st.success("🎯 **Parlay Ready:** Combining **" + leg1_name + "** and **" + leg2_name + "** with a " + str(val if 'val' in locals() else boost_val) + "% boost yields **" + str(boosted_parlay_american) + "** odds!")
