@@ -94,10 +94,47 @@ def decimal_to_american(dec):
         val = int(-100 / (dec - 1))
         return f"{val}"
 
+# Comprehensive cleaning function for bookmakers
 def clean_book_title(title):
-    if "theScore" in title or "ESPN" in title:
-        return "ESPN/Score"
-    return title
+    t_lower = str(title).lower()
+    if "espn" in t_lower or "score" in t_lower:
+        return "ESPN BET"
+    elif "draftkings" in t_lower:
+        return "DraftKings"
+    elif "fanduel" in t_lower:
+        return "FanDuel"
+    elif "betmgm" in t_lower:
+        return "BetMGM"
+    elif "bet365" in t_lower:
+        return "Bet365"
+    elif "betrivers" in t_lower:
+        return "BetRivers"
+    elif "pinnacle" in t_lower:
+        return "Pinnacle"
+    return title.title()
+
+# Helper to shorten team names to 3-letter codes for compact matchup display
+team_to_abbrev = {
+    'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF',
+    'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY',
+    'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL',
+    'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA',
+    'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL',
+    'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI',
+    'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI',
+    'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
+    'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
+    'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN',
+    'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
+}
+
+def compact_matchup(matchup_str):
+    if " @ " in matchup_str:
+        away, home = matchup_str.split(" @ ")
+        away_code = team_to_abbrev.get(away.strip(), away.strip()[:3].upper())
+        home_code = team_to_abbrev.get(home.strip(), home.strip()[:3].upper())
+        return f"{away_code} @ {home_code}"
+    return matchup_str
 
 with tab1:
     fetch_all_btn = col_m2.button("🔄 Scan Slate & Calculate +EV", use_container_width=True)
@@ -263,6 +300,8 @@ with tab1:
                 display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over', 'Fair Odds', 'Edge %']].copy()
                 display_scan.insert(0, 'Select', False)
                 
+                # Apply compact formatting to matchup and numbers
+                display_scan['Matchup'] = display_scan['Matchup'].apply(compact_matchup)
                 display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
                 display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
                 display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
@@ -275,9 +314,9 @@ with tab1:
                     display_scan,
                     column_config={
                         "Select": st.column_config.CheckboxColumn("Select", required=True),
-                        "Matchup": st.column_config.TextColumn("Matchup", width="medium"),
+                        "Matchup": st.column_config.TextColumn("Matchup", width="small"),
                         "Sportsbook": st.column_config.TextColumn("Sportsbook", width="small"),
-                        "Player": st.column_config.TextColumn("Player", width="large"),
+                        "Player": st.column_config.TextColumn("Player", width="medium"),
                     },
                     disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate', 'Model Over', 'Fair Odds', 'Edge %'],
                     use_container_width=True,
@@ -540,7 +579,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
