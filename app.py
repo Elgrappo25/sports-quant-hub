@@ -233,16 +233,24 @@ with tab1:
                 
                 st.divider()
                 
-                # GAME SELECTOR & PLAYER SEARCH BAR COLUMNS
-                col_f1, col_f2 = st.columns(2)
+                # 3-COLUMN FILTER HEADER: MATCHUP | SPORTSBOOK | PLAYER SEARCH
+                col_f1, col_f2, col_f3 = st.columns(3)
                 
                 available_matchups = ["All Games (Full Slate)"] + sorted(merged_scan['Matchup'].unique().tolist())
                 selected_matchup = col_f1.selectbox("🏟️ Filter by Specific Game Matchup", available_matchups)
                 
+                available_books_list = ["All Sportsbooks"] + sorted(merged_scan['Sportsbook'].unique().tolist())
+                selected_book = col_f2.selectbox("🏛️ Filter by Specific Sportsbook", available_books_list)
+                
+                search_query = col_f3.text_input("🔍 Search Player Name", placeholder="Type player name...").strip()
+                
+                # Apply secondary filters
                 if selected_matchup != "All Games (Full Slate)":
                     merged_scan = merged_scan[merged_scan['Matchup'] == selected_matchup]
                 
-                search_query = col_f2.text_input("🔍 Search Player Name", placeholder="Type player name...").strip()
+                if selected_book != "All Sportsbooks":
+                    merged_scan = merged_scan[merged_scan['Sportsbook'] == selected_book]
+                    
                 if search_query:
                     merged_scan = merged_scan[merged_scan['Player'].str.contains(search_query, case=False, na=False)]
                 
@@ -251,7 +259,7 @@ with tab1:
                 top_edge = merged_scan['Edge (%)'].max() if len(merged_scan) > 0 else 0.0
                 
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Filtered Props in Matchup", len(merged_scan))
+                m1.metric("Filtered Props in View", len(merged_scan))
                 m2.metric("Sweet Spot Opportunities", pos_ev_count)
                 m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
                 
@@ -477,7 +485,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
