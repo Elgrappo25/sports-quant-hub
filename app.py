@@ -11,11 +11,6 @@ st.markdown("""
         .main { background-color: #0e1117; }
         .stMetric { background-color: #161b22; padding: 15px; border-radius: 10px; border: 1px solid #30363d; }
         .stDataFrame { border-radius: 10px; overflow: hidden; }
-        /* Force neon green font for positive edge values in tables */
-        td[data-testid="stTableCell"]:last-child {
-            color: #00E676 !important;
-            font-weight: bold !important;
-        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -101,7 +96,7 @@ def decimal_to_american(dec):
 
 def clean_book_title(title):
     if "theScore" in title or "ESPN" in title:
-        return "theScore Bet"
+        return "ESPN/Score"
     return title
 
 with tab1:
@@ -280,9 +275,9 @@ with tab1:
                     display_scan,
                     column_config={
                         "Select": st.column_config.CheckboxColumn("Select", required=True),
-                        "Matchup": st.column_config.TextColumn("Matchup", width="large"),
+                        "Matchup": st.column_config.TextColumn("Matchup", width="medium"),
                         "Sportsbook": st.column_config.TextColumn("Sportsbook", width="small"),
-                        "Player": st.column_config.TextColumn("Player", width="medium"),
+                        "Player": st.column_config.TextColumn("Player", width="large"),
                     },
                     disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate', 'Model Over', 'Fair Odds', 'Edge %'],
                     use_container_width=True,
