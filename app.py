@@ -126,7 +126,7 @@ with tab1:
                             game_data = resp.json()
                             for bookmaker in game_data.get('bookmakers', []):
                                 b_title = bookmaker['title']
-                                for market in bookmaker.get('markets', []):
+                                for market in game_data.get('markets', []):
                                     for outcome in market.get('outcomes', []):
                                         if outcome.get('name') == 'Over':
                                             all_prop_rows.append({
@@ -263,9 +263,11 @@ with tab1:
                 m2.metric("Sweet Spot Opportunities", pos_ev_count)
                 m3.metric("Max Edge Available", f"+{top_edge}%" if top_edge > 0 else f"{top_edge}%")
                 
-                st.write("### 🎯 Slate +EV Market Comparison Board:")
+                st.write("### 🎯 Slate +EV Market Comparison Board (Check rows to build slip):")
                 
+                # Prepare display dataframe with an interactive checkbox column ('Select')
                 display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over (%)', 'Fair Odds', 'Edge (%)']].copy()
+                display_scan.insert(0, 'Select', False)
                 display_scan.rename(columns={'Matchup_Proj': 'Proj Rate (λ)'}, inplace=True)
                 
                 def color_edge(val):
@@ -274,12 +276,71 @@ with tab1:
                     elif val < 0.0:
                         return 'color: #FF5252;'
                     return 'color: #CFD8DC;'
-                    
-                st.dataframe(
-                    display_scan.style.map(color_edge, subset=['Edge (%)']),
+                
+                # Render interactive data editor so user can check boxes directly in the table
+                edited_df = st.data_editor(
+                    display_scan,
+                    column_config={"Select": st.column_config.CheckboxColumn("Select", required=True)},
+                    disabled=['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Proj Rate (λ)', 'Model Over (%)', 'Fair Odds', 'Edge (%)'],
                     use_container_width=True,
-                    height=500
+                    height=400,
+                    key="slate_editor"
                 )
+                
+                # Extract checked rows for live parlay & boost calculation
+                checked_rows = edited_df[edited_df['Select'] == True]
+                
+                if len(checked_rows) > 0:
+                    st.divider()
+                    st.subheader("🚀 Live Checked Slip & Boost Compound Calculator")
+                    
+                    combined_dec = 1.0
+                    combined_true_prob = 1.0
+                    slip_summary = []
+                    
+                    for idx, row in checked_rows.iterrows():
+                        # Retrieve original decimal odds from merged_scan using player & sportsbook match
+                        original_match = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (merged_scan['Line'] == row['Line'])]
+                        if len(original_match) > 0:
+                            dec = original_match.iloc[0]['Decimal Odds']
+                            prob = original_match.iloc[0]['Model_Over_Prob']
+                            combined_dec *= dec
+                            combined_true_prob *= prob
+                            
+                            slip_summary.append({
+                                "Sportsbook": row['Sportsbook'],
+                                "Player": row['Player'],
+                                "Line": row['Line'],
+                                "Odds": row['Odds'],
+                                "Model Win Prob": f"{row['Model Over (%)']}%",
+                                "Edge": f"+{row['Edge (%)']}%"
+                            })
+                            
+                    st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
+                    
+                    # Parlay American Odds Calculation
+                    parlay_american = int((combined_dec - 1) * 100) if combined_dec >= 2 else int(-100 / (combined_dec - 1))
+                    parlay_american_str = f"+{parlay_american}" if parlay_american > 0 else f"{parlay_american}"
+                    
+                    # Boosted Odds Calculation
+                    profit_factor = combined_dec - 1
+                    boosted_dec = 1 + (profit_factor * (1 + (global_boost / 100)))
+                    boosted_american = int((boosted_dec - 1) * 100) if boosted_dec >= 2 else int(-100 / (boosted_dec - 1))
+                    boosted_american_str = f"+{boosted_american}" if boosted_american > 0 else f"{boosted_american}"
+                    
+                    slip_implied_prob = 1.0 / combined_dec
+                    slip_edge = round((combined_true_prob - slip_implied_prob) * 100, 1)
+                    
+                    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+                    res_col1.metric("Checked Parlay Odds", parlay_american_str)
+                    res_col2.metric(f"Boosted Odds (+{global_boost}%)", boosted_american_str)
+                    res_col3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
+                    res_col4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
+                    
+                    if slip_edge > 0:
+                        st.success(f"🟢 **Profitable Compound Edge:** This checked parlay slip holds a **+{slip_edge}% mathematical edge** over the sportsbook!")
+                    else:
+                        st.warning(f"⚠️ **Negative Edge:** This checked combination carries a house disadvantage. Try unchecking or swapping legs.")
         else:
             st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first so the terminal can correctly map stats for your selected market!")
             st.dataframe(master_df[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds']], use_container_width=True, height=400)
@@ -485,7 +546,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
@@ -495,8 +556,8 @@ with tab2:
         st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
 
 with tab3:
-    st.subheader("🚀 Boost & Parlay Compound Optimizer")
-    st.write("Test multi-leg slips and profit boosts to verify true expected value (+EV).")
+    st.subheader("🚀 Standalone Boost & Parlay Compound Optimizer")
+    st.write("Test multi-leg slips and profit boosts manually if you prefer typing legs out.")
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
@@ -521,6 +582,6 @@ with tab3:
     st.divider()
     col_res1, col_res2 = st.columns(2)
     col_res1.metric(label="Standard 2-Leg Parlay Odds Feed", value=f"{parlay_american:+d}")
-    col_res2.metric(label="Boosted Parlay Odds (+" + str(boosted_parlay_american) + "%)", value=f"{boosted_parlay_american:+d}")
+    col_res2.metric(label="Boosted Parlay Odds (+" + str(boost_val) + "%)", value=f"{boosted_parlay_american:+d}")
     
     st.success("🎯 **Parlay Ready:** Combining **" + leg1_name + "** and **" + leg2_name + "** with a " + str(boost_val) + "% boost yields **" + str(boosted_parlay_american) + "** odds!")
