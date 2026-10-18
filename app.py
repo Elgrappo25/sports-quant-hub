@@ -374,7 +374,7 @@ with tab1:
                         st.warning(f"⚠️ **Negative Edge:** This checked combination carries a house disadvantage. Try unchecking or swapping legs.")
 
                 # ==========================================
-                # AUTOMATED SAME-BOOK PARLAY GENERATOR
+                # AUTOMATED SAME-BOOK PARLAY GENERATOR (EXPANDED LEG OPTIONS)
                 # ==========================================
                 st.divider()
                 st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -382,7 +382,7 @@ with tab1:
                 
                 auto_col1, auto_col2, auto_col3 = st.columns(3)
                 parlay_mode = auto_col1.selectbox("Parlay Type", ["Same Game Parlay (SGP)", "Multi-Game Parlay (Independent)"])
-                parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3])
+                parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3, 4, 5])
                 min_parlay_edge = auto_col3.slider("Min Parlay Edge (%)", min_value=0.0, max_value=25.0, value=3.0, step=0.5)
                 
                 generate_parlays_btn = st.button("⚡ Generate Top Automated Parlays", use_container_width=True)
@@ -404,12 +404,10 @@ with tab1:
                                 match_set = {r['Matchup'] for r in combo_rows}
                                 if len(match_set) > 1:
                                     continue # Skip if legs belong to different games
-                                # Prevent picking multiple props for the exact same player in the same parlay
                                 player_set = {r['Player'] for r in combo_rows}
                                 if len(player_set) < parlay_legs_count:
                                     continue
                             else:
-                                # Multi-game mode: ensure legs are from distinct matchups to avoid correlation violation
                                 match_set = {r['Matchup'] for r in combo_rows}
                                 if len(match_set) < parlay_legs_count:
                                     continue
@@ -427,15 +425,15 @@ with tab1:
                                 comb_prob *= r['Model_Over_Prob']
                                 leg_descriptions.append(f"{r['Player']} O{r['Line']} ({r['Odds']})")
                             
-                            # Apply SGP correlation haircut if SGP mode is active (e.g., 15% probability haircut for book house tax)
+                            # Apply SGP correlation haircut if SGP mode is active (scaled slightly by leg count for house tax)
                             if "Same Game Parlay" in parlay_mode:
-                                comb_prob *= 0.85
+                                haircut_factor = 0.85 if parlay_legs_count <= 3 else 0.78
+                                comb_prob *= haircut_factor
                                 
                             implied_p = 1.0 / comb_dec
                             slip_e = round((comb_prob - implied_p) * 100, 1)
                             
                             if slip_e >= min_parlay_edge:
-                                # Calculate boosted payout
                                 p_factor = comb_dec - 1
                                 b_dec = 1 + (p_factor * (1 + (global_boost / 100)))
                                 b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
@@ -665,7 +663,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
