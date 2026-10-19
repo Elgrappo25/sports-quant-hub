@@ -289,6 +289,77 @@ if "NHL" in active_sport:
                         r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
                         r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
                         r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
+
+                    # ==========================================
+                    # AUTOMATED SAME-BOOK PARLAY GENERATOR RESTORED
+                    # ==========================================
+                    st.divider()
+                    st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
+                    auto_col1, auto_col2, auto_col3 = st.columns(3)
+                    parlay_mode = auto_col1.selectbox("Parlay Type", ["Same Game Parlay (SGP)", "Multi-Game Parlay (Independent)"], key="auto_parlay_mode")
+                    parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3, 4, 5], key="auto_parlay_legs")
+                    min_parlay_edge = auto_col3.slider("Min Parlay Edge (%)", min_value=0.0, max_value=25.0, value=3.0, step=0.5, key="auto_min_edge")
+                    generate_parlays_btn = st.button("⚡ Generate Top Automated Parlays", use_container_width=True)
+                    
+                    if generate_parlays_btn:
+                        generated_slips = []
+                        for book_name, book_df in merged_scan.groupby("Sportsbook"):
+                            if len(book_df) < parlay_legs_count: continue
+                            for combo in itertools.combinations(book_df.iterrows(), parlay_legs_count):
+                                combo_rows = [item[1] for item in combo]
+                                if "Same Game Parlay" in parlay_mode:
+                                    match_set = {r['Matchup'] for r in combo_rows}
+                                    if len(match_set) > 1: continue
+                                    player_set = {r['Player'] for r in combo_rows}
+                                    if len(player_set) < parlay_legs_count: continue
+                                else:
+                                    match_set = {r['Matchup'] for r in combo_rows}
+                                    if len(match_set) < parlay_legs_count: continue
+                                    player_set = {r['Player'] for r in combo_rows}
+                                    if len(player_set) < parlay_legs_count: continue
+
+                                comb_dec = 1.0
+                                comb_prob = 1.0
+                                leg_descriptions = []
+                                for r in combo_rows:
+                                    comb_dec *= r['Decimal Odds']
+                                    comb_prob *= r['Model_Over_Prob']
+                                    leg_descriptions.append(f"{r['Player']} O{r['Line']} ({r['Odds']})")
+                                
+                                if "Same Game Parlay" in parlay_mode:
+                                    haircut_factor = 0.85 if parlay_legs_count <= 3 else 0.78
+                                    comb_prob *= haircut_factor
+                                    
+                                implied_p = 1.0 / comb_dec
+                                slip_e = round((comb_prob - implied_p) * 100, 1)
+                                
+                                if slip_e >= min_parlay_edge:
+                                    p_factor = comb_dec - 1
+                                    b_dec = 1 + (p_factor * (1 + (global_boost / 100)))
+                                    b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
+                                    b_str = f"+{b_am}" if b_am > 0 else f"{b_am}"
+                                    std_am = int((comb_dec - 1) * 100) if comb_dec >= 2 else int(-100 / (comb_dec - 1))
+                                    std_str = f"+{std_am}" if std_am > 0 else f"{std_am}"
+                                    generated_slips.append({
+                                        "Sportsbook": book_name,
+                                        "Type": parlay_mode.split()[0],
+                                        "Legs": " + | + ".join(leg_descriptions),
+                                        "Standard Odds": std_str,
+                                        f"Boosted Odds (+{global_boost}%)": b_str,
+                                        "Model Prob": f"{round(comb_prob * 100, 1)}%",
+                                        "Compound Edge %": slip_e
+                                    })
+                        
+                        if generated_slips:
+                            parlay_results_df = pd.DataFrame(generated_slips)
+                            parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
+                            st.session_state['generated_parlays_cache'] = parlay_results_df
+                        else:
+                            st.warning("⚠️ No parlays found matching your criteria.")
+                    
+                    if 'generated_parlays_cache' in st.session_state:
+                        st.success(f"🎉 Showing cached automated parlays session.")
+                        st.dataframe(st.session_state['generated_parlays_cache'].head(10), use_container_width=True)
             else:
                 st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
         else:
@@ -336,9 +407,9 @@ if "NHL" in active_sport:
                     
             if curr_player_df is not None and prev_player_df is not None:
                 nst_to_standard = {'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ', 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL', 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'}
-                def clean_team(team_str):
-                    if pd.isna(team_str): return 'UNK'
-                    return nst_to_standard.get(str(team_str).split(',')[-1].strip(), str(team_str).split(',')[-1].strip())
+                def clean_team(t_str):
+                    if pd.isna(t_str): return 'UNK'
+                    return nst_to_standard.get(str(t_str).split(',')[-1].strip(), str(t_str).split(',')[-1].strip())
 
                 active_teams = set()
                 team_matchup_factors = {}
@@ -429,7 +500,7 @@ if "NHL" in active_sport:
 
                 st.dataframe(
                     final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                               .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                               .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                     use_container_width=True,
                     height=500
                 )
