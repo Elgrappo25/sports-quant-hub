@@ -21,7 +21,7 @@ st.markdown("""
 st.sidebar.header("🏆 Master Sport Terminal")
 active_sport = st.sidebar.selectbox(
     "Select Active Sport", 
-    ["🏒 NHL (Active)", "🏈 NFL (Automated Data)"],
+    ["🏒 NHL (Active)", "🏈 NFL (Manual Upload Terminal)"],
     key="master_sport_switch"
 )
 st.sidebar.divider()
@@ -348,42 +348,34 @@ if "NHL" in active_sport:
 
 
 # ==============================================================================
-# FOOTBALL (NFL) PIPELINE
+# FOOTBALL (NFL) PIPELINE (MANUAL UPLOAD)
 # ==============================================================================
 elif "NFL" in active_sport:
-    st.title("🏈 NFL Quant Terminal: Production Suite")
-    st.markdown("### Automated weekly data ingestion, game schedule filtering, alt-line props, and parlay building.")
+    st.title("🏈 NFL Quant Terminal: Manual Upload Suite")
+    st.markdown("### Drop your weekly player stats CSV, filter the game schedule, and batch scan live props.")
 
     tab_nfl1, tab_nfl2 = st.tabs([
         "📊 Automated +EV NFL Prop Scanner & Parlay Builder", 
-        "📁 Automated nflverse Data Status & Settings"
+        "📁 NFL CSV Uploader & Data Status"
     ])
 
     with tab_nfl2:
-        st.subheader("Automated Weekly Player Stats Engine (nflverse)")
-        st.write("Player statistics update automatically via open-source weekly releases every Wednesday morning.")
-        nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025, 2024], index=0)
+        st.subheader("NFL Weekly Player Stats Uploader")
+        st.write("Upload your exported weekly player stats CSV file below to power the NFL prop scanning engine.")
         
-        load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
-        if load_nfl_btn or 'nfl_master_df' not in st.session_state:
+        nfl_uploaded_file = st.file_uploader("Upload NFL Player Stats CSV", type="csv", key="nfl_csv_drop")
+        
+        if nfl_uploaded_file is not None:
             try:
-                # Direct CSV endpoint from nflverse repository data branch
-                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/master/player_stats/stats_player_week_{nfl_season_input}.csv"
-                nfl_raw = pd.read_csv(url)
+                nfl_raw = pd.read_csv(nfl_uploaded_file)
                 st.session_state['nfl_master_df'] = nfl_raw
-                st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
+                st.success(f"🟢 Successfully loaded {len(nfl_raw)} rows of NFL player stats!")
             except Exception as e:
-                try:
-                    # Fallback compressed format URL
-                    url_gz = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{nfl_season_input}.csv.gz"
-                    nfl_raw = pd.read_csv(url_gz, compression='gzip')
-                    st.session_state['nfl_master_df'] = nfl_raw
-                    st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
-                except Exception as e2:
-                    st.warning(f"⚠️ Could not fetch data for {nfl_season_input}: {e2}. Note: 2026 weekly data publishes as games occur.")
+                st.error(f"⚠️ Error reading uploaded CSV: {e}")
 
         if 'nfl_master_df' in st.session_state:
-            st.metric("Total Player Week Records Loaded", len(st.session_state['nfl_master_df']))
+            st.metric("Total Player Records Loaded", len(st.session_state['nfl_master_df']))
+            st.dataframe(st.session_state['nfl_master_df'].head(20), use_container_width=True)
 
     with tab_nfl1:
         col_nfl_s1, col_nfl_s2 = st.columns([2, 1])
