@@ -133,7 +133,7 @@ if "NHL" in active_sport:
         st.session_state['manual_props_df'] = edited_input_df
 
         if len(edited_input_df) > 0 and 'raw_player_dfs' in st.session_state:
-            curr_df, prev_df, team_factors = st.session_state['raw_player_dfs']
+            curr_df, prev_df, team_factors, team_opponents_dict = st.session_state['raw_player_dfs']
             
             processed_rows = []
             for _, r in edited_input_df.iterrows():
@@ -186,7 +186,17 @@ if "NHL" in active_sport:
                         return team_to_abbrev.get(raw, raw)
                         
                     merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
-                    merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
+                    
+                    # FIX: Map opponent team factor correctly for manual prop entries
+                    def get_manual_matchup_factor(row):
+                        team = row['Clean_Team']
+                        # Look up opponent abbrev from team_opponents_dict stored in session state
+                        opp_abbrev = team_opponents_dict.get(team, None)
+                        if opp_abbrev and opp_abbrev in team_factors:
+                            return team_factors[opp_abbrev]
+                        return 1.0
+
+                    merged_model['Matchup_Factor'] = merged_model.apply(get_manual_matchup_factor, axis=1)
                     merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
                     
                     merged_scan = pd.merge(market_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
@@ -275,7 +285,8 @@ if "NHL" in active_sport:
             if curr_player_df is not None and prev_player_df is not None:
                 active_teams = set()
                 team_matchup_factors = {}
-                team_opponents = {}
+                team_opponents_raw = {} # Maps team -> opponent raw abbrev
+                team_opponents_display = {} # Maps team -> "@TOR" or "vs MTL"
                 
                 try:
                     sched_resp = requests.get(f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}").json()
@@ -301,15 +312,18 @@ if "NHL" in active_sport:
                                 if away: active_teams.add(away)
                                 if home: active_teams.add(home)
                                 if away and home:
-                                    team_opponents[away] = f"@{home}"
-                                    team_opponents[home] = f"vs {away}"
+                                    team_opponents_raw[away] = home
+                                    team_opponents_raw[home] = away
+                                    team_opponents_display[away] = f"@{home}"
+                                    team_opponents_display[home] = f"vs {away}"
                 except Exception as e:
                     pass
 
                 target_col = 'Shots' if batch_market == "Shots on Goal (SOG)" else ('Total Points' if batch_market == "Points (G+A)" else ('Goals' if batch_market == "Anytime Goal Scorer" else 'Total Assists'))
                 prev_col = target_col
 
-                st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
+                # FIX: Save team_opponents_raw into raw_player_dfs tuple so Tab 1 manual input can also access opponent lookups!
+                st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors, team_opponents_raw)
 
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
                 
@@ -330,11 +344,19 @@ if "NHL" in active_sport:
                 
                 merged_df['Baseline_Stat'] = merged_df['Stat_prev'] / gp_prev
                 merged_df['Current_Stat'] = merged_df['Stat_curr'] / gp_curr
-                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100)) if 'merged_model' in locals() else (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
+                # FIX: Map OPPONENT's defensive factor using team_opponents_raw lookup!
+                def get_opp_factor(row):
+                    team = row['Clean_Team']
+                    opp_abbrev = team_opponents_raw.get(team, None)
+                    if opp_abbrev and opp_abbrev in team_matchup_factors:
+                        return team_matchup_factors[opp_abbrev]
+                    return 1.0
+
+                merged_df['Matchup_Factor'] = merged_df.apply(get_opp_factor, axis=1)
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
-                merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
+                merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents_display).fillna("vs --")
 
                 merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
                 merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
