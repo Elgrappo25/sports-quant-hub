@@ -262,7 +262,7 @@ if "NHL" in active_sport:
                     display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
                     display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
                     display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
-                    display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
+                    display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: "+{x:.1f}%" if x > 0 else f"{x:.1f}%")
                     display_scan.drop(columns=['Matchup_Proj'], inplace=True)
                     
                     edited_df = st.data_editor(display_scan, use_container_width=True, height=400, key="nhl_slate_editor")
@@ -348,7 +348,7 @@ if "NHL" in active_sport:
 
 
 # ==============================================================================
-# FOOTBALL (NFL) PIPELINE (AUTO-FETCH + CSV FALLBACK)
+# FOOTBALL (NFL) PIPELINE (SKILL FILTER + WEEK SELECTOR)
 # ==============================================================================
 elif "NFL" in active_sport:
     st.title("🏈 NFL Quant Terminal: Production Suite")
@@ -356,11 +356,11 @@ elif "NFL" in active_sport:
 
     tab_nfl1, tab_nfl2 = st.tabs([
         "📊 Automated +EV NFL Prop Scanner & Parlay Builder", 
-        "📁 Automated nflverse Data Status & Settings"
+        "📁 NFL Data Ingestion & Status"
     ])
 
     with tab_nfl2:
-        st.subheader("Automated Weekly Player Stats Engine (nflverse)")
+        st.subheader("NFL Weekly Player Stats Engine (nflverse)")
         st.write("Click below to automatically ingest the latest clean weekly player stats dataset directly into your model.")
         
         nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025, 2024], index=1)
@@ -373,15 +373,8 @@ elif "NFL" in active_sport:
                 st.session_state['nfl_master_df'] = nfl_raw
                 st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
             except Exception as e:
-                try:
-                    url_gz = f"https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_{nfl_season_input}.csv.gz"
-                    nfl_raw = pd.read_csv(url_gz, compression='gzip')
-                    st.session_state['nfl_master_df'] = nfl_raw
-                    st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
-                except Exception as e2:
-                    st.warning(f"⚠️ Could not automatically fetch data: {e2}. You can also drop a weekly CSV file below:")
+                st.warning(f"⚠️ Could not automatically fetch data: {e}. You can also drop a weekly CSV file below:")
 
-        # Always available manual uploader fallback
         fallback_nfl_file = st.file_uploader("Or Drop Weekly NFL CSV File Here", type="csv", key="nfl_fallback_drop")
         if fallback_nfl_file is not None:
             nfl_raw = pd.read_csv(fallback_nfl_file)
@@ -390,14 +383,26 @@ elif "NFL" in active_sport:
 
         if 'nfl_master_df' in st.session_state:
             nfl_df = st.session_state['nfl_master_df']
-            st.metric("Total Player Week Records Loaded", len(nfl_df))
             
+            # Filter strictly to offensive skill positions (QB, RB, WR, TE, FB)
+            skill_pos = ['QB', 'RB', 'WR', 'TE', 'FB']
+            if 'position' in nfl_df.columns:
+                nfl_df = nfl_df[nfl_df['position'].isin(skill_pos)].copy()
+
+            st.metric("Total Skill Player Records Loaded", len(nfl_df))
+
+            # Week selector filter
+            if 'week' in nfl_df.columns:
+                available_weeks = sorted(nfl_df['week'].unique().tolist())
+                selected_nfl_week = st.selectbox("📅 Select NFL Week Filter", available_weeks, index=len(available_weeks)-1 if available_weeks else 0)
+                nfl_df = nfl_df[nfl_df['week'] == selected_nfl_week].copy()
+
             show_cols = [c for c in ['player_display_name', 'position', 'recent_team', 'opponent_team', 'week', 'passing_yards', 'rushing_yards', 'receiving_yards', 'receptions', 'passing_tds', 'rushing_tds', 'receiving_tds'] if c in nfl_df.columns]
             if show_cols:
                 st.write("### 📋 Cleaned Skill Player Data Preview:")
-                st.dataframe(nfl_df[show_cols].head(25), use_container_width=True)
+                st.dataframe(nfl_df[show_cols].head(50), use_container_width=True)
             else:
-                st.dataframe(nfl_df.head(25), use_container_width=True)
+                st.dataframe(nfl_df.head(50), use_container_width=True)
 
     with tab_nfl1:
         col_nfl_s1, col_nfl_s2 = st.columns([2, 1])
