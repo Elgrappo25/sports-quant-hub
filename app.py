@@ -348,68 +348,49 @@ if "NHL" in active_sport:
 
 
 # ==============================================================================
-# FOOTBALL (NFL) PIPELINE (NST-STYLE DROPZONE + SCHEDULE & MATCHUP MAPPING)
+# FOOTBALL (NFL) PIPELINE (SMART FILE RECOGNITION UPLOADER)
 # ==============================================================================
 elif "NFL" in active_sport:
     st.title("🏈 NFL Quant Terminal: NST-Style Suite")
-    st.markdown("### Drop your NFL CSV files, filter by target date, and batch scan live props with matchup factors.")
+    st.markdown("### Drop your NFL play-by-play or stats file, filter by date, and batch scan live props.")
 
     tab_nfl1, tab_nfl2 = st.tabs([
         "📊 Automated +EV NFL Prop Scanner & Parlay Builder", 
-        "📁 NFL Multi-File Uploader & Matchup Matrix"
+        "📁 NFL CSV Uploader & Matchup Matrix"
     ])
 
     with tab_nfl2:
         st.subheader("NFL Multi-File CSV Dropzone")
-        st.write("Drop your exported NFL Player stats and Team defense CSV files below.")
+        st.write("Drop your exported NFL files (like `pbp-2026.csv` or weekly player stats) below.")
         
         nfl_uploaded_files = st.file_uploader(
-            "Drop NFL Player & Team CSV files here", 
+            "Drop NFL CSV files here", 
             type="csv", 
             accept_multiple_files=True,
-            key="nfl_nst_style_drop"
+            key="nfl_smart_drop"
         )
         
-        nfl_target_date = st.date_input("Target NFL Slate Date for Matchup Factors", value=date.today(), key="nfl_nst_date")
-
         if nfl_uploaded_files:
-            nfl_player_df, nfl_team_df = None, None
             for file in nfl_uploaded_files:
-                fname = file.name.lower()
                 try:
-                    temp_df = pd.read_csv(file)
-                    if "player" in fname or "stats" in fname:
-                        nfl_player_df = temp_df
-                        st.success(f"🟢 Loaded NFL Player File: {file.name} ({len(temp_df)} rows)")
-                    elif "team" in fname or "def" in fname or "game" in fname:
-                        nfl_team_df = temp_df
-                        st.success(f"🟢 Loaded NFL Team File: {file.name} ({len(temp_df)} rows)")
+                    df_temp = pd.read_csv(file)
+                    # Automatically recognize ANY dropped CSV as the master dataset!
+                    st.session_state['nfl_master_df'] = df_temp
+                    st.success(f"🟢 Successfully recognized and loaded: {file.name} ({len(df_temp)} rows)")
                 except Exception as e:
                     st.error(f"⚠️ Error reading {file.name}: {e}")
-            
-            if nfl_player_df is not None:
-                # Fetch NFL schedule to map opponent matchup factors
-                nfl_matchup_factors = {}
-                try:
-                    # The Odds API or ESPN/NFL schedule endpoint fallback for matchups on target date
-                    sched_url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={nfl_target_date.strftime('%Y%m%d')}"
-                    sched_resp = requests.get(sched_url, timeout=5).json()
-                    events = sched_resp.get("events", [])
-                    st.info(f"📅 Found {len(events)} NFL games scheduled for {nfl_target_date}.")
-                except Exception as e:
-                    st.warning(f"Schedule fetch notice: {e}")
 
-                st.session_state['nfl_model_data'] = (nfl_player_df, nfl_team_df)
-                st.write("### 📋 Player Data Matrix Preview:")
-                st.dataframe(nfl_player_df.head(25), use_container_width=True)
-            else:
-                st.warning("Please upload at least your NFL Player CSV dataset.")
+        if 'nfl_master_df' in st.session_state:
+            nfl_df = st.session_state['nfl_master_df']
+            st.metric("Total Records Loaded", len(nfl_df))
+            st.write("### 📋 Dataset Preview:")
+            st.dataframe(nfl_df.head(25), use_container_width=True)
         else:
-            st.info("💡 **Instructions:** Drop your NFL CSV files above to initialize the model matrix.")
+            st.info("💡 **Instructions:** Drop your `pbp-2026.csv` or stats file above to initialize the NFL model.")
 
     with tab_nfl1:
         col_nfl_s1, col_nfl_s2 = st.columns([2, 1])
-        target_nfl_scan_date = col_nfl_s1.date_input("📅 Target NFL Slate Date", value=date.today(), key="nfl_scan_date_picker")
+        target_nfl_date = col_nfl_s1.date_input("📅 Target NFL Slate Date", value=date.today(), key="nfl_date_picker")
         fetch_nfl_odds_btn = col_nfl_s2.button("🔄 Batch Scan NFL Markets", use_container_width=True)
 
         all_nfl_rows = []
@@ -427,7 +408,7 @@ elif "NFL" in active_sport:
                         
                         progress_bar = st.progress(0)
                         scanned_count = 0
-                        target_date_str = target_nfl_scan_date.strftime('%Y-%m-%d')
+                        target_date_str = target_nfl_date.strftime('%Y-%m-%d')
 
                         for idx, ev in enumerate(events_list):
                             if target_date_str not in ev.get('commence_time', ''): continue
