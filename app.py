@@ -197,7 +197,7 @@ if "NHL" in active_sport:
                 market_df = market_df[market_df['Line'] == 0.5]
                 default_min_e, default_max_e = 8.0, 25.0
             elif "assists" in market_view_choice:
-                market_df = master_df[market_df['Market'] == "player_assists"].copy()
+                market_df = master_df[master_df['Market'] == "player_assists"].copy()
                 market_df = market_df[market_df['Line'] == 0.5]
                 default_min_e, default_max_e = 6.0, 18.0
             else:
@@ -451,7 +451,7 @@ elif "NFL" in active_sport:
                                         m_key = market.get('key')
                                         for outcome in market.get('outcomes', []):
                                             if outcome.get('name') == 'Over':
-                               -                 all_nfl_rows.append({
+                                                all_nfl_rows.append({
                                                     "Matchup": matchup_str, "Market": m_key, "Sportsbook": b_title,
                                                     "Player": outcome.get('description').strip(), "Line": float(outcome.get('point')),
                                                     "Decimal Odds": outcome.get('price'), "Odds": decimal_to_american(outcome.get('price'))
