@@ -330,7 +330,7 @@ if "NHL" in active_sport:
                 
                 merged_df['Baseline_Stat'] = merged_df['Stat_prev'] / gp_prev
                 merged_df['Current_Stat'] = merged_df['Stat_curr'] / gp_curr
-                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100)) if 'merged_model' in locals() else (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
                 merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
@@ -368,8 +368,7 @@ if "NHL" in active_sport:
                     return 'color: #CFD8DC;'
 
                 st.dataframe(
-                    final_board.style.applymap(lambda v: color_matrix_cells(val=v, col_name='Matchup_Factor'), subset=['Matchup_Factor'])
-                                     .applymap(lambda v: color_matrix_cells(val=v, col_name='Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                    final_board.style.apply(lambda col: [color_matrix_cells(val=v, col_name=col.name) for v in col], subset=['Matchup_Factor', 'Model_Over_Prob_%']),
                     use_container_width=True,
                     height=500
                 )
