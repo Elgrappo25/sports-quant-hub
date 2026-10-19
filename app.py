@@ -280,7 +280,7 @@ if "NHL" in active_sport:
                         r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                     # ==========================================
-                    # AUTOMATED PARLAY GENERATOR (UN-SQUISHED CARDS)
+                    # AUTOMATED PARLAY GENERATOR (STRICT UNIQUE-PLAYER MATH FIX)
                     # ==========================================
                     st.divider()
                     st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -293,19 +293,23 @@ if "NHL" in active_sport:
                     if generate_parlays_btn:
                         generated_slips = []
                         for book_name, book_df in merged_scan.groupby("Sportsbook"):
-                            if len(book_df) < parlay_legs_count: continue
-                            for combo in itertools.combinations(book_df.iterrows(), parlay_legs_count):
+                            # Drop duplicate rows for the same player/line in the same book so we take unique props
+                            book_df_clean = book_df.drop_duplicates(subset=['Player', 'Line']).reset_index(drop=True)
+                            if len(book_df_clean) < parlay_legs_count: continue
+                            
+                            for combo in itertools.combinations(book_df_clean.iterrows(), parlay_legs_count):
                                 combo_rows = [item[1] for item in combo]
+                                
+                                # Ensure every leg is a completely unique player
+                                player_set = {r['Player'] for r in combo_rows}
+                                if len(player_set) < parlay_legs_count: continue
+                                
                                 if "Same Game Parlay" in parlay_mode:
                                     match_set = {r['Matchup'] for r in combo_rows}
                                     if len(match_set) > 1: continue
-                                    player_set = {r['Player'] for r in combo_rows}
-                                    if len(player_set) < parlay_legs_count: continue
                                 else:
                                     match_set = {r['Matchup'] for r in combo_rows}
                                     if len(match_set) < parlay_legs_count: continue
-                                    player_set = {r['Player'] for r in combo_rows}
-                                    if len(player_set) < parlay_legs_count: continue
 
                                 comb_dec = 1.0
                                 comb_prob = 1.0
