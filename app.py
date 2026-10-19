@@ -124,7 +124,6 @@ if "NHL" in active_sport:
         st.subheader("📝 Manual Nexus Odds & Prop Input")
         st.write("Enter the player props from your Nexus Odds screen below to run them against your NST model projections.")
 
-        # Default sample row so the table is never empty on load
         if 'manual_props_df' not in st.session_state:
             st.session_state['manual_props_df'] = pd.DataFrame([
                 {"Select": False, "Matchup": "TOR @ MTL", "Sportsbook": "FanDuel", "Player": "Auston Matthews", "Market": "player_shots_on_goal", "Line": 3.5, "Odds (+/-)": "+115"}
@@ -207,14 +206,38 @@ if "NHL" in active_sport:
                         display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
                         display_scan.drop(columns=['Matchup_Proj'], inplace=True)
                         
-                        st.write("### 📈 Model Evaluation & Edge Matrix:")
-                        st.dataframe(display_scan, use_container_width=True, height=400)
+                        edited_df = st.data_editor(display_scan, use_container_width=True, height=400, key="nexus_slate_editor")
+                        
+                        checked_rows = edited_df[edited_df['Select'] == True]
+                        if len(checked_rows) > 0:
+                            st.subheader("🚀 Live Checked Slip & Boost Compound Calculator")
+                            combined_dec, combined_true_prob, slip_summary = 1.0, 1.0, []
+                            for idx, row in checked_rows.iterrows():
+                                orig = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (abs(merged_scan['Line'] - float(row['Line'])) < 0.1)]
+                                if len(orig) > 0:
+                                    dec, prob = orig.iloc[0]['Decimal Odds'], orig.iloc[0]['Model_Over_Prob']
+                                    combined_dec *= dec
+                                    combined_true_prob *= prob
+                                    slip_summary.append({"Sportsbook": row['Sportsbook'], "Player": row['Player'], "Line": row['Line'], "Odds": row['Odds'], "Model Win Prob": row['Model Over'], "Edge": row['Edge %']})
+                            st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
+                            p_am = int((combined_dec - 1) * 100) if combined_dec >= 2 else int(-100 / (combined_dec - 1))
+                            b_dec = 1 + ((combined_dec - 1) * (1 + (global_boost / 100)))
+                            b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
+                            slip_edge = round((combined_true_prob - (1.0 / combined_dec)) * 100, 1)
+                            
+                            r1, r2, r3, r4 = st.columns(4)
+                            r1.metric("Checked Parlay Odds", f"+{p_am}" if p_am > 0 else f"{p_am}")
+                            r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
+                            r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
+                            r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
+            else:
+                st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
         else:
-            st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
+            st.info("💡 **Instructions:** Enter props above to evaluate edges.")
 
     with tab2:
         st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
-        st.write("Drop your 4 Natural Stat Trick count files below.")
+        st.write("Drop your 4 Natural Stat Trick count files below to generate the master probability and matchup matrix.")
         
         batch_market = st.selectbox(
             "Select Target Prop Market", 
@@ -250,7 +273,10 @@ if "NHL" in active_sport:
                     else: prev_team_df = temp_df
                     
             if curr_player_df is not None and prev_player_df is not None:
+                active_teams = set()
                 team_matchup_factors = {}
+                team_opponents = {}
+                
                 try:
                     sched_resp = requests.get(f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}").json()
                     if curr_team_df is not None and 'Team' in curr_team_df.columns:
@@ -266,11 +292,91 @@ if "NHL" in active_sport:
                             val = row.get('Stat_Per_Game', mean_val)
                             factor = val / mean_val if mean_val > 0 else 1.0
                             if pd.notnull(t_abbrev): team_matchup_factors[t_abbrev] = max(0.80, min(1.20, factor))
-                except: pass
+
+                    for week_day in sched_resp.get("gameWeek", []):
+                        if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
+                            for game in week_day.get("games", []):
+                                away = game.get("awayTeam", {}).get("abbrev")
+                                home = game.get("homeTeam", {}).get("abbrev")
+                                if away: active_teams.add(away)
+                                if home: active_teams.add(home)
+                                if away and home:
+                                    team_opponents[away] = f"@{home}"
+                                    team_opponents[home] = f"vs {away}"
+                except Exception as e:
+                    pass
 
                 target_col = 'Shots' if batch_market == "Shots on Goal (SOG)" else ('Total Points' if batch_market == "Points (G+A)" else ('Goals' if batch_market == "Anytime Goal Scorer" else 'Total Assists'))
+                prev_col = target_col
+
                 st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
-                st.success("🟢 NST Player files successfully loaded and cached for model pairing!")
+
+                merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+                
+                def clean_team(t_str):
+                    if pd.isna(t_str): return 'UNK'
+                    raw = str(t_str).split(',')[-1].strip()
+                    return team_to_abbrev.get(raw, raw)
+
+                merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
+                
+                merged_df['Stat_curr'] = pd.to_numeric(merged_df[f'{target_col}_curr'], errors='coerce').fillna(0)
+                merged_df['Stat_prev'] = pd.to_numeric(merged_df[f'{prev_col}_prev'], errors='coerce').fillna(0)
+                
+                gp_prev = pd.to_numeric(merged_df.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
+                gp_curr = pd.to_numeric(merged_df.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
+                
+                merged_df = merged_df[gp_curr >= min_gp].copy()
+                
+                merged_df['Baseline_Stat'] = merged_df['Stat_prev'] / gp_prev
+                merged_df['Current_Stat'] = merged_df['Stat_curr'] / gp_curr
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
+                
+                merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
+                merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
+                merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
+
+                merged_df['Model_Over_Prob'] = merged_scan['Model_Over_Prob'] if 'merged_scan' in locals() else merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
+                merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
+                merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
+                
+                filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
+                if filter_slate and active_teams and 'Clean_Team' in merged_df.columns:
+                    filtered_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
+                    if len(filtered_df) > 0:
+                        merged_df = filtered_df
+                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
+                
+                st.write(f"### 📈 Slate Alt-Line Matrix ({batch_market} > {target_line_choice}):")
+                display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Matchup_Factor', 'Matchup_Proj', 'Model_Over_Prob_%', 'Fair_American_Odds']
+                
+                final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
+
+                def color_matrix_cells(val, col_name):
+                    if isinstance(val, (int, float)):
+                        if col_name == 'Matchup_Factor':
+                            if val > 1.05: return 'color: #00E676; font-weight: bold;'
+                            elif val < 0.95: return 'color: #FF5252; font-weight: bold;'
+                        elif col_name == 'Model_Over_Prob_%':
+                            if batch_market == "Anytime Goal Scorer": green_thresh, red_thresh = 42.0, 32.0
+                            elif batch_market == "Points (G+A)": green_thresh, red_thresh = (72.0 if target_line_choice <= 0.5 else 45.0), 50.0
+                            elif batch_market == "Assists Only": green_thresh, red_thresh = (65.0 if target_line_choice <= 0.5 else 40.0), 45.0
+                            else: green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
+                            
+                            if val >= green_thresh: return 'color: #00E676; font-weight: bold;'
+                            elif val <= red_thresh: return 'color: #FF5252; font-weight: bold;'
+                    return 'color: #CFD8DC;'
+
+                st.dataframe(
+                    final_board.style.map(lambda v: color_matrix_cells(val=v, col_name='Matchup_Factor'), subset=['Matchup_Factor'])
+                               .map(lambda v: color_matrix_cells(val=v, col_name='Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                    use_container_width=True,
+                    height=500
+                )
+            else:
+                st.warning("Please upload both Player Season Total CSV files.")
+        else:
+            st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
 
 # ==============================================================================
 # FOOTBALL (NFL) PLACEHOLDER
