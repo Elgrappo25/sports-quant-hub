@@ -27,13 +27,17 @@ active_sport = st.sidebar.selectbox(
 st.sidebar.divider()
 
 # ==========================================
-# COMMON GLOBAL SETTINGS
+# SPORT-SPECIFIC GLOBAL SETTINGS
 # ==========================================
-st.sidebar.header("⚙️ Global Model Settings")
-season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
-min_gp = st.sidebar.slider("Minimum Current Season GP/Games Filter", min_value=1, max_value=15, value=3, step=1)
+if "NHL" in active_sport:
+    st.sidebar.header("⚙️ NHL Model Settings")
+    season_weight = st.sidebar.slider("Current Season Sample Weight (%)", min_value=10, max_value=90, value=15, step=5)
+    min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
+    st.sidebar.divider()
+else:
+    # Defaults for NFL so variables always exist
+    season_weight, min_gp = 0, 0
 
-st.sidebar.divider()
 st.sidebar.header("🎯 Market-Tailored Edge Filters")
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
@@ -45,8 +49,7 @@ selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_boo
 
 # Shared Math Functions
 def poisson_prob(lam, k):
-    if lam <= 0:
-        return 0.0
+    if lam <= 0: return 0.0
     return (math.exp(-lam) * (lam ** k)) / math.factorial(k)
 
 def poisson_over_prob(lam, threshold):
@@ -315,7 +318,7 @@ if "NHL" in active_sport:
                 try:
                     sched_resp = requests.get(f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}").json()
                     if curr_team_df is not None and 'Team' in curr_team_df.columns:
-                        f_std = {'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF', 'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY', 'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL', 'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA', 'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL', 'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI', 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI', 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA', 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'}
+                        f_std = {'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF', 'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY', 'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL', 'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA', 'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL', 'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI', 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI', 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA', 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'}
                         curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(f_std)
                         stat_col = 'SA' if batch_market == "Shots on Goal (SOG)" else ('HDCA' if batch_market == "Anytime Goal Scorer" else 'SCA')
                         if stat_col not in curr_team_df.columns: stat_col = 'CA'
@@ -364,12 +367,13 @@ elif "NFL" in active_sport:
         load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
         if load_nfl_btn or 'nfl_master_df' not in st.session_state:
             try:
-                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/master/player_stats/stats_player_week_{nfl_season_input}.csv"
+                # Updated to point correctly to the main branch release file
+                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/main/player_stats/stats_player_week_{nfl_season_input}.csv"
                 nfl_raw = pd.read_csv(url)
                 st.session_state['nfl_master_df'] = nfl_raw
                 st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
             except Exception as e:
-                st.warning(f"⚠️ Could not automatically fetch live CSV yet: {e}. Check back after season games initialize.")
+                st.warning(f"⚠️ Could not automatically fetch live CSV: {e}. Check back after season games initialize.")
 
         if 'nfl_master_df' in st.session_state:
             st.metric("Total Player Week Records Loaded", len(st.session_state['nfl_master_df']))
