@@ -368,8 +368,8 @@ if "NHL" in active_sport:
                     return 'color: #CFD8DC;'
 
                 st.dataframe(
-                    final_board.style.map(lambda v: color_matrix_cells(val=v, col_name='Matchup_Factor'), subset=['Matchup_Factor'])
-                               .map(lambda v: color_matrix_cells(val=v, col_name='Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                    final_board.style.applymap(lambda v: color_matrix_cells(val=v, col_name='Matchup_Factor'), subset=['Matchup_Factor'])
+                                     .applymap(lambda v: color_matrix_cells(val=v, col_name='Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                     use_container_width=True,
                     height=500
                 )
