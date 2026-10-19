@@ -336,7 +336,7 @@ if "NHL" in active_sport:
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
                 merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
 
-                merged_df['Model_Over_Prob'] = merged_scan['Model_Over_Prob'] if 'merged_scan' in locals() else merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
+                merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
                 merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
                 merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
                 
