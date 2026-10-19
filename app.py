@@ -197,7 +197,7 @@ if "NHL" in active_sport:
                 market_df = market_df[market_df['Line'] == 0.5]
                 default_min_e, default_max_e = 8.0, 25.0
             elif "assists" in market_view_choice:
-                market_df = master_df[master_df['Market'] == "player_assists"].copy()
+                market_df = master_df[market_df['Market'] == "player_assists"].copy()
                 market_df = market_df[market_df['Line'] == 0.5]
                 default_min_e, default_max_e = 6.0, 18.0
             else:
@@ -348,45 +348,70 @@ if "NHL" in active_sport:
 
 
 # ==============================================================================
-# FOOTBALL (NFL) PIPELINE (SMART FILE RECOGNITION UPLOADER)
+# FOOTBALL (NFL) PIPELINE (PBP AGGREGATION TO SEASON TOTALS)
 # ==============================================================================
 elif "NFL" in active_sport:
-    st.title("🏈 NFL Quant Terminal: NST-Style Suite")
-    st.markdown("### Drop your NFL play-by-play or stats file, filter by date, and batch scan live props.")
+    st.title("🏈 NFL Quant Terminal: Production Suite")
+    st.markdown("### Aggregating play-by-play stats into season totals, batch scanning props, and parlay building.")
 
     tab_nfl1, tab_nfl2 = st.tabs([
         "📊 Automated +EV NFL Prop Scanner & Parlay Builder", 
-        "📁 NFL CSV Uploader & Matchup Matrix"
+        "📁 NFL PBP Aggregator & Data Status"
     ])
 
     with tab_nfl2:
-        st.subheader("NFL Multi-File CSV Dropzone")
-        st.write("Drop your exported NFL files (like `pbp-2026.csv` or weekly player stats) below.")
+        st.subheader("NFL Play-by-Play Aggregator")
+        st.write("Drop your `pbp-2026.csv` file below. The model will automatically aggregate every play into clean, season-to-date player totals (Passing Yards, Rushing Yards, Receptions, Receiving Yards, Touchdowns).")
         
-        nfl_uploaded_files = st.file_uploader(
-            "Drop NFL CSV files here", 
+        nfl_uploaded_file = st.file_uploader(
+            "Drop pbp-2026.csv here", 
             type="csv", 
-            accept_multiple_files=True,
-            key="nfl_smart_drop"
+            key="nfl_pbp_drop"
         )
         
-        if nfl_uploaded_files:
-            for file in nfl_uploaded_files:
-                try:
-                    df_temp = pd.read_csv(file)
-                    # Automatically recognize ANY dropped CSV as the master dataset!
-                    st.session_state['nfl_master_df'] = df_temp
-                    st.success(f"🟢 Successfully recognized and loaded: {file.name} ({len(df_temp)} rows)")
-                except Exception as e:
-                    st.error(f"⚠️ Error reading {file.name}: {e}")
+        if nfl_uploaded_file is not None:
+            try:
+                pbp_df = pd.read_csv(nfl_uploaded_file, low_memory=False)
+                
+                # Aggregate Passing
+                pass_agg = pbp_df.groupby('passer_player_name').agg(
+                    pass_yds=('passing_yards', 'sum'),
+                    pass_tds=('pass_touchdown', 'sum'),
+                    games=('game_id', 'nunique')
+                ).reset_index().rename(columns={'passer_player_name': 'Player'})
 
-        if 'nfl_master_df' in st.session_state:
-            nfl_df = st.session_state['nfl_master_df']
-            st.metric("Total Records Loaded", len(nfl_df))
-            st.write("### 📋 Dataset Preview:")
-            st.dataframe(nfl_df.head(25), use_container_width=True)
+                # Aggregate Rushing
+                rush_agg = pbp_df.groupby('rusher_player_name').agg(
+                    rush_yds=('rushing_yards', 'sum'),
+                    rush_tds=('rush_touchdown', 'sum'),
+                    carries=('rush_attempt', 'sum')
+                ).reset_index().rename(columns={'rusher_player_name': 'Player'})
+
+                # Aggregate Receiving
+                rec_agg = pbp_df.groupby('receiver_player_name').agg(
+                    rec_yds=('receiving_yards', 'sum'),
+                    receptions=('complete_pass', 'sum'),
+                    rec_tds=('pass_touchdown', 'sum')
+                ).reset_index().rename(columns={'receiver_player_name': 'Player'})
+
+                # Save aggregated master table into session state
+                st.session_state['nfl_agg_player_df'] = {'pass': pass_agg, 'rush': rush_agg, 'rec': rec_agg}
+                st.success(f"🟢 Successfully aggregated play-by-play data into season totals for {len(pass_agg)} passers, {len(rush_agg)} rushers, and {len(rec_agg)} receivers!")
+            except Exception as e:
+                st.error(f"⚠️ Error processing PBP file: {e}")
+
+        if 'nfl_agg_player_df' in st.session_state:
+            agg_data = st.session_state['nfl_agg_player_df']
+            st.write("### 📋 Season-to-Date Passing Leaders:")
+            st.dataframe(agg_data['pass'].sort_values(by='pass_yds', ascending=False).head(15), use_container_width=True)
+            
+            st.write("### 📋 Season-to-Date Rushing Leaders:")
+            st.dataframe(agg_data['rush'].sort_values(by='rush_yds', ascending=False).head(15), use_container_width=True)
+
+            st.write("### 📋 Season-to-Date Receiving Leaders:")
+            st.dataframe(agg_data['rec'].sort_values(by='rec_yds', ascending=False).head(15), use_container_width=True)
         else:
-            st.info("💡 **Instructions:** Drop your `pbp-2026.csv` or stats file above to initialize the NFL model.")
+            st.info("💡 **Instructions:** Drop your `pbp-2026.csv` file above to generate aggregated season totals.")
 
     with tab_nfl1:
         col_nfl_s1, col_nfl_s2 = st.columns([2, 1])
@@ -426,7 +451,7 @@ elif "NFL" in active_sport:
                                         m_key = market.get('key')
                                         for outcome in market.get('outcomes', []):
                                             if outcome.get('name') == 'Over':
-                                                all_nfl_rows.append({
+                               -                 all_nfl_rows.append({
                                                     "Matchup": matchup_str, "Market": m_key, "Sportsbook": b_title,
                                                     "Player": outcome.get('description').strip(), "Line": float(outcome.get('point')),
                                                     "Decimal Odds": outcome.get('price'), "Odds": decimal_to_american(outcome.get('price'))
