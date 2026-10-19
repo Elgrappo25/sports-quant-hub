@@ -368,14 +368,14 @@ with tab1:
                     res_col4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                 # ==========================================
-                # AUTOMATED SAME-BOOK PARLAY GENERATOR (STABLE ORIGINAL LAYOUT)
+                # AUTOMATED SAME-BOOK PARLAY GENERATOR (PERSISTENT STATE)
                 # ==========================================
                 st.divider()
                 st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
                 auto_col1, auto_col2, auto_col3 = st.columns(3)
-                parlay_mode = auto_col1.selectbox("Parlay Type", ["Same Game Parlay (SGP)", "Multi-Game Parlay (Independent)"])
-                parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3, 4, 5])
-                min_parlay_edge = auto_col3.slider("Min Parlay Edge (%)", min_value=0.0, max_value=25.0, value=3.0, step=0.5)
+                parlay_mode = auto_col1.selectbox("Parlay Type", ["Same Game Parlay (SGP)", "Multi-Game Parlay (Independent)"], key="auto_parlay_mode")
+                parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3, 4, 5], key="auto_parlay_legs")
+                min_parlay_edge = auto_col3.slider("Min Parlay Edge (%)", min_value=0.0, max_value=25.0, value=3.0, step=0.5, key="auto_min_edge")
                 generate_parlays_btn = st.button("⚡ Generate Top Automated Parlays", use_container_width=True)
                 
                 if generate_parlays_btn:
@@ -431,10 +431,14 @@ with tab1:
                     if generated_slips:
                         parlay_results_df = pd.DataFrame(generated_slips)
                         parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
-                        st.success(f"🎉 Generated **{len(parlay_results_df)}** profitable automated parlays!")
-                        st.dataframe(parlay_results_df.head(10), use_container_width=True)
+                        st.session_state['generated_parlays_cache'] = parlay_results_df
                     else:
                         st.warning("⚠️ No parlays found matching your criteria.")
+                
+                # Persistent display if parlays exist in session state (protects against accidental re-runs / refreshes)
+                if 'generated_parlays_cache' in st.session_state:
+                    st.success(f"🎉 Showing cached automated parlays session.")
+                    st.dataframe(st.session_state['generated_parlays_cache'].head(10), use_container_width=True)
         else:
             st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in **Tab 2** first.")
     else:
@@ -639,7 +643,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
