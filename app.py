@@ -27,7 +27,7 @@ active_sport = st.sidebar.selectbox(
 st.sidebar.divider()
 
 # ==========================================
-# SPORT-SPECIFIC GLOBAL SETTINGS
+# DYNAMIC SPORT-SPECIFIC SIDEBAR CONTROLS
 # ==========================================
 if "NHL" in active_sport:
     st.sidebar.header("⚙️ NHL Model Settings")
@@ -35,9 +35,9 @@ if "NHL" in active_sport:
     min_gp = st.sidebar.slider("Minimum Current Season GP Filter", min_value=1, max_value=15, value=3, step=1)
     st.sidebar.divider()
 else:
-    # Defaults for NFL so variables always exist
     season_weight, min_gp = 0, 0
 
+# Global Settings Shared Across Both Sports
 st.sidebar.header("🎯 Market-Tailored Edge Filters")
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
@@ -367,8 +367,8 @@ elif "NFL" in active_sport:
         load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
         if load_nfl_btn or 'nfl_master_df' not in st.session_state:
             try:
-                # Updated to point correctly to the main branch release file
-                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/main/player_stats/stats_player_week_{nfl_season_input}.csv"
+                # Fixed release URL pointing directly to the official nflverse weekly player stats dataset
+                url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{nfl_season_input}.csv"
                 nfl_raw = pd.read_csv(url)
                 st.session_state['nfl_master_df'] = nfl_raw
                 st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
