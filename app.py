@@ -435,7 +435,6 @@ with tab1:
                     else:
                         st.warning("⚠️ No parlays found matching your criteria.")
                 
-                # Persistent display if parlays exist in session state (protects against accidental re-runs / refreshes)
                 if 'generated_parlays_cache' in st.session_state:
                     st.success(f"🎉 Showing cached automated parlays session.")
                     st.dataframe(st.session_state['generated_parlays_cache'].head(10), use_container_width=True)
@@ -642,8 +641,7 @@ with tab2:
                 return 'color: #CFD8DC;'
 
             st.dataframe(
-                final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor']).map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
