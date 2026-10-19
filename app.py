@@ -130,7 +130,6 @@ with tab1:
                     events_list = events_resp.json()
                     books_str = ",".join(selected_books)
                     
-                    # Wish #1: Multi-Market Batch Query string
                     batch_markets = "player_points,player_shots_on_goal,player_goals,player_assists,player_shots_on_goal_alternate,player_points_alternate"
                     
                     progress_bar = st.progress(0)
@@ -141,7 +140,6 @@ with tab1:
 
                     for idx, ev in enumerate(events_list):
                         ev_commence = ev.get('commence_time', '')
-                        # Wish #2: Filter strictly by target date slate
                         if target_date_str not in ev_commence:
                             continue
                             
@@ -194,7 +192,6 @@ with tab1:
             format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
         )
         
-        # Filter master df for currently selected market tab view
         if "shots_on_goal" in market_view_choice:
             market_df = master_df[master_df['Market'].str.contains("shots_on_goal", na=False)].copy()
             market_df = market_df[market_df['Line'].isin([1.5, 2.5, 3.5])]
@@ -212,7 +209,6 @@ with tab1:
             market_df = market_df[market_df['Line'] == 0.5]
             default_min_e, default_max_e = 6.0, 18.0
 
-        # Wish #3: Market-tailored edge filter controls in UI
         col_ef1, col_ef2 = st.columns(2)
         min_edge_filter = col_ef1.slider(f"Min Edge Filter (%) for {market_view_choice.replace('_',' ').title()}", min_value=0.0, max_value=30.0, value=default_min_e, step=0.5)
         max_edge_filter = col_ef2.slider(f"Max Edge Filter (%) for {market_view_choice.replace('_',' ').title()}", min_value=5.0, max_value=70.0, value=default_max_e, step=1.0)
@@ -624,4 +620,30 @@ with tab2:
                         if val > 1.05:
                             return 'color: #00E676; font-weight: bold;'
                         elif val < 0.95:
-                            return 'color: #
+                            return 'color: #FF5252; font-weight: bold;'
+                    elif col_name == 'Model_Over_Prob_%':
+                        if batch_market == "Anytime Goal Scorer":
+                            green_thresh, red_thresh = 42.0, 32.0
+                        elif batch_market == "Points (G+A)":
+                            green_thresh, red_thresh = (72.0 if target_line_choice <= 0.5 else 45.0), 50.0
+                        elif batch_market == "Assists Only":
+                            green_thresh, red_thresh = (65.0 if target_line_choice <= 0.5 else 40.0), 45.0
+                        else:
+                            green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
+                            
+                        if val >= green_thresh:
+                            return 'color: #00E676; font-weight: bold;'
+                        elif val <= red_thresh:
+                            return 'color: #FF5252; font-weight: bold;'
+                return 'color: #CFD8DC;'
+
+            st.dataframe(
+                final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                use_container_width=True,
+                height=500
+            )
+        else:
+            st.warning("Please upload both Player Season Total CSV files.")
+    else:
+        st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
