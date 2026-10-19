@@ -21,7 +21,7 @@ st.markdown("""
 st.sidebar.header("🏆 Master Sport Terminal")
 active_sport = st.sidebar.selectbox(
     "Select Active Sport", 
-    ["🏒 NHL (Active)", "🏈 NFL (Automated Data)"],
+    ["🏒 NHL (Active)", "🏈 NFL (NST-Style Terminal)"],
     key="master_sport_switch"
 )
 st.sidebar.divider()
@@ -262,7 +262,7 @@ if "NHL" in active_sport:
                     display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
                     display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
                     display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
-                    display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: "+{x:.1f}%" if x > 0 else f"{x:.1f}%")
+                    display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
                     display_scan.drop(columns=['Matchup_Proj'], inplace=True)
                     
                     edited_df = st.data_editor(display_scan, use_container_width=True, height=400, key="nhl_slate_editor")
@@ -348,65 +348,68 @@ if "NHL" in active_sport:
 
 
 # ==============================================================================
-# FOOTBALL (NFL) PIPELINE (SKILL FILTER + WEEK SELECTOR)
+# FOOTBALL (NFL) PIPELINE (NST-STYLE DROPZONE + SCHEDULE & MATCHUP MAPPING)
 # ==============================================================================
 elif "NFL" in active_sport:
-    st.title("🏈 NFL Quant Terminal: Production Suite")
-    st.markdown("### Automated weekly data ingestion, game schedule filtering, alt-line props, and parlay building.")
+    st.title("🏈 NFL Quant Terminal: NST-Style Suite")
+    st.markdown("### Drop your NFL CSV files, filter by target date, and batch scan live props with matchup factors.")
 
     tab_nfl1, tab_nfl2 = st.tabs([
         "📊 Automated +EV NFL Prop Scanner & Parlay Builder", 
-        "📁 NFL Data Ingestion & Status"
+        "📁 NFL Multi-File Uploader & Matchup Matrix"
     ])
 
     with tab_nfl2:
-        st.subheader("NFL Weekly Player Stats Engine (nflverse)")
-        st.write("Click below to automatically ingest the latest clean weekly player stats dataset directly into your model.")
+        st.subheader("NFL Multi-File CSV Dropzone")
+        st.write("Drop your exported NFL Player stats and Team defense CSV files below.")
         
-        nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025, 2024], index=1)
-        load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
+        nfl_uploaded_files = st.file_uploader(
+            "Drop NFL Player & Team CSV files here", 
+            type="csv", 
+            accept_multiple_files=True,
+            key="nfl_nst_style_drop"
+        )
         
-        if load_nfl_btn or 'nfl_master_df' not in st.session_state:
-            try:
-                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/master/stats_player/stats_player_week_{nfl_season_input}.csv"
-                nfl_raw = pd.read_csv(url)
-                st.session_state['nfl_master_df'] = nfl_raw
-                st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
-            except Exception as e:
-                st.warning(f"⚠️ Could not automatically fetch data: {e}. You can also drop a weekly CSV file below:")
+        nfl_target_date = st.date_input("Target NFL Slate Date for Matchup Factors", value=date.today(), key="nfl_nst_date")
 
-        fallback_nfl_file = st.file_uploader("Or Drop Weekly NFL CSV File Here", type="csv", key="nfl_fallback_drop")
-        if fallback_nfl_file is not None:
-            nfl_raw = pd.read_csv(fallback_nfl_file)
-            st.session_state['nfl_master_df'] = nfl_raw
-            st.success(f"🟢 Successfully loaded {len(nfl_raw)} rows from uploaded file!")
-
-        if 'nfl_master_df' in st.session_state:
-            nfl_df = st.session_state['nfl_master_df']
+        if nfl_uploaded_files:
+            nfl_player_df, nfl_team_df = None, None
+            for file in nfl_uploaded_files:
+                fname = file.name.lower()
+                try:
+                    temp_df = pd.read_csv(file)
+                    if "player" in fname or "stats" in fname:
+                        nfl_player_df = temp_df
+                        st.success(f"🟢 Loaded NFL Player File: {file.name} ({len(temp_df)} rows)")
+                    elif "team" in fname or "def" in fname or "game" in fname:
+                        nfl_team_df = temp_df
+                        st.success(f"🟢 Loaded NFL Team File: {file.name} ({len(temp_df)} rows)")
+                except Exception as e:
+                    st.error(f"⚠️ Error reading {file.name}: {e}")
             
-            # Filter strictly to offensive skill positions (QB, RB, WR, TE, FB)
-            skill_pos = ['QB', 'RB', 'WR', 'TE', 'FB']
-            if 'position' in nfl_df.columns:
-                nfl_df = nfl_df[nfl_df['position'].isin(skill_pos)].copy()
+            if nfl_player_df is not None:
+                # Fetch NFL schedule to map opponent matchup factors
+                nfl_matchup_factors = {}
+                try:
+                    # The Odds API or ESPN/NFL schedule endpoint fallback for matchups on target date
+                    sched_url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={nfl_target_date.strftime('%Y%m%d')}"
+                    sched_resp = requests.get(sched_url, timeout=5).json()
+                    events = sched_resp.get("events", [])
+                    st.info(f"📅 Found {len(events)} NFL games scheduled for {nfl_target_date}.")
+                except Exception as e:
+                    st.warning(f"Schedule fetch notice: {e}")
 
-            st.metric("Total Skill Player Records Loaded", len(nfl_df))
-
-            # Week selector filter
-            if 'week' in nfl_df.columns:
-                available_weeks = sorted(nfl_df['week'].unique().tolist())
-                selected_nfl_week = st.selectbox("📅 Select NFL Week Filter", available_weeks, index=len(available_weeks)-1 if available_weeks else 0)
-                nfl_df = nfl_df[nfl_df['week'] == selected_nfl_week].copy()
-
-            show_cols = [c for c in ['player_display_name', 'position', 'recent_team', 'opponent_team', 'week', 'passing_yards', 'rushing_yards', 'receiving_yards', 'receptions', 'passing_tds', 'rushing_tds', 'receiving_tds'] if c in nfl_df.columns]
-            if show_cols:
-                st.write("### 📋 Cleaned Skill Player Data Preview:")
-                st.dataframe(nfl_df[show_cols].head(50), use_container_width=True)
+                st.session_state['nfl_model_data'] = (nfl_player_df, nfl_team_df)
+                st.write("### 📋 Player Data Matrix Preview:")
+                st.dataframe(nfl_player_df.head(25), use_container_width=True)
             else:
-                st.dataframe(nfl_df.head(50), use_container_width=True)
+                st.warning("Please upload at least your NFL Player CSV dataset.")
+        else:
+            st.info("💡 **Instructions:** Drop your NFL CSV files above to initialize the model matrix.")
 
     with tab_nfl1:
         col_nfl_s1, col_nfl_s2 = st.columns([2, 1])
-        target_nfl_date = col_nfl_s1.date_input("📅 Target NFL Slate Date", value=date.today(), key="nfl_date_picker")
+        target_nfl_scan_date = col_nfl_s1.date_input("📅 Target NFL Slate Date", value=date.today(), key="nfl_scan_date_picker")
         fetch_nfl_odds_btn = col_nfl_s2.button("🔄 Batch Scan NFL Markets", use_container_width=True)
 
         all_nfl_rows = []
@@ -424,7 +427,7 @@ elif "NFL" in active_sport:
                         
                         progress_bar = st.progress(0)
                         scanned_count = 0
-                        target_date_str = target_nfl_date.strftime('%Y-%m-%d')
+                        target_date_str = target_nfl_scan_date.strftime('%Y-%m-%d')
 
                         for idx, ev in enumerate(events_list):
                             if target_date_str not in ev.get('commence_time', ''): continue
