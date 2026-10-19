@@ -367,20 +367,23 @@ elif "NFL" in active_sport:
         load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
         if load_nfl_btn or 'nfl_master_df' not in st.session_state:
             try:
-                # Direct CSV endpoint from nflverse repository data branch
-                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/master/player_stats/stats_player_week_{nfl_season_input}.csv"
+                # Dynamically target current vs past season endpoints
+                if nfl_season_input == 2026:
+                    url = "https://raw.githubusercontent.com/nflverse/nflverse-data/master/player_stats/stats_player_week_2026.csv"
+                else:
+                    url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{nfl_season_input}.csv"
+                
                 nfl_raw = pd.read_csv(url)
                 st.session_state['nfl_master_df'] = nfl_raw
                 st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
             except Exception as e:
                 try:
-                    # Fallback compressed format URL
                     url_gz = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{nfl_season_input}.csv.gz"
                     nfl_raw = pd.read_csv(url_gz, compression='gzip')
                     st.session_state['nfl_master_df'] = nfl_raw
                     st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
                 except Exception as e2:
-                    st.warning(f"⚠️ Could not fetch data for {nfl_season_input}: {e2}. Note: 2026 weekly data publishes as games occur.")
+                    st.warning(f"⚠️ 2026 weekly data files publish as games occur. Select **2025** or **2024** to view fully populated season datasets.")
 
         if 'nfl_master_df' in st.session_state:
             st.metric("Total Player Week Records Loaded", len(st.session_state['nfl_master_df']))
