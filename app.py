@@ -5,7 +5,7 @@ import math
 from datetime import date
 import itertools
 
-st.set_page_config(page_title="Sports Quant Hub - Multi-Sport Terminal", page_icon="🏆", layout="wide")
+st.set_page_config(page_title="Sports Quant Hub - Multi-Sport Terminal", page_icon="🏒", layout="wide")
 
 st.markdown("""
     <style>
@@ -234,10 +234,10 @@ if "NHL" in active_sport:
                 merged_model['Current_Stat'] = merged_model['Stat_curr'] / gp_curr
                 merged_model['Blended_Proj'] = (merged_model['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100))
                 
+                nst_to_standard = {'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ', 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL', 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'}
                 def clean_team(t_str):
                     if pd.isna(t_str): return 'UNK'
-                    raw = str(t_str).split(',')[-1].strip()
-                    return team_to_abbrev.get(raw, raw)
+                    return nst_to_standard.get(str(t_str).split(',')[-1].strip(), str(t_str).split(',')[-1].strip())
                     
                 merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
                 merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
@@ -293,8 +293,8 @@ if "NHL" in active_sport:
                         slip_edge = round((combined_true_prob - (1.0 / combined_dec)) * 100, 1)
                         
                         r1, r2, r3, r4 = st.columns(4)
-                        r1.metric("Checked Parlay Odds", f"+{p_am}" if p_am > 0 else f"{p_am}")
-                        r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
+                        r1.metric("Checked Parlay Odds", f"+{p_am}" if p_am > 0 else f"+{p_am}")
+                        r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"+{b_am}")
                         r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
                         r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
@@ -423,13 +423,29 @@ if "NHL" in active_sport:
                     
                     if curr_team_df is not None and 'Team' in curr_team_df.columns:
                         curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(team_to_abbrev)
-                        stat_col = 'SA' if batch_market == "Shots on Goal (SOG)" else ('HDCA' if batch_market == "Anytime Goal Scorer" else 'SCA')
+                        
+                        # DYNAMIC MARKET-TAILORED STAT COLUMN SELECTION
+                        if batch_market == "Shots on Goal (SOG)":
+                            stat_col = 'SA' # Shots Against
+                        elif batch_market == "Anytime Goal Scorer":
+                            stat_col = 'HDCA' # High Danger Chances Against
+                        else:
+                            stat_col = 'SCA' # Scoring Chances Against for Points/Assists
+                            
                         if stat_col not in curr_team_df.columns: stat_col = 'CA'
+                        
                         curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
-                        mean_val = curr_team_df[stat_col].mean() if stat_col in curr_team_df.columns else 1.0
+                        
+                        # FIX: Calculate PER-GAME rate (Stat / GP) so teams with more games don't skew totals
+                        curr_team_df['GP_numeric'] = pd.to_numeric(curr_team_df['GP'], errors='coerce').fillna(1)
+                        curr_team_df['Stat_Per_Game'] = curr_team_df[stat_col] / curr_team_df['GP_numeric']
+                        
+                        mean_val = curr_team_df['Stat_Per_Game'].mean() if len(curr_team_df) > 0 else 1.0
+                        
                         for _, row in curr_team_df.iterrows():
                             t_abbrev = row['Standard_Abbrev']
-                            factor = row.get(stat_col, mean_val) / mean_val if mean_val > 0 else 1.0
+                            val = row.get('Stat_Per_Game', mean_val)
+                            factor = val / mean_val if mean_val > 0 else 1.0
                             if pd.notnull(t_abbrev): team_matchup_factors[t_abbrev] = max(0.80, min(1.20, factor))
 
                     for week_day in sched_resp.get("gameWeek", []):
