@@ -4,9 +4,6 @@ import requests
 import math
 from datetime import date
 import itertools
-from google import genai
-from PIL import Image
-import io
 
 st.set_page_config(page_title="Sports Quant Hub - Multi-Sport Terminal", page_icon="🏒", layout="wide")
 
@@ -45,8 +42,9 @@ st.sidebar.header("🎯 Market-Tailored Edge Filters")
 global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 
 st.sidebar.divider()
-st.sidebar.header("🔌 Nexus Odds & Vision Input")
-gemini_api_key = st.sidebar.text_input("Gemini API Key (for Vision OCR)", type="password", placeholder="Enter Gemini key to read screenshots...")
+st.sidebar.header("🔌 Live Props & Line Shopping")
+available_books = ["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "espnbet", "pinnacle"]
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle", "espnbet"])
 
 # Shared Math Functions
 def poisson_prob(lam, k):
@@ -94,10 +92,10 @@ def clean_book_title(title):
 # ==============================================================================
 if "NHL" in active_sport:
     st.title("🏒 NHL Quant Terminal: Production Suite")
-    st.markdown("### Nexus Screenshot Parsing, NST Projections, Poisson Math, and +EV Parlay Generation.")
+    st.markdown("### Manual Prop Input, NST Projections, Poisson Math, and +EV Parlay Generation.")
 
     tab1, tab2 = st.tabs([
-        "📊 Nexus Vision Parser & +EV Prop Scanner", 
+        "📊 Manual Prop Input & +EV Scanner", 
         "📁 Multi-File NST Uploader & Market Matrix"
     ])
 
@@ -123,156 +121,96 @@ if "NHL" in active_sport:
     }
 
     with tab1:
-        st.subheader("📸 Nexus Odds Screenshot Uploader")
-        st.write("Upload a screenshot from Nexus Odds or any sportsbook. Our Vision parser will instantly extract the player props, lines, and odds.")
-        
-        uploaded_screenshot = st.file_uploader("Upload Nexus Odds Screenshot", type=["png", "jpg", "jpeg"], key="nexus_screenshot_drop")
-        
-        if uploaded_screenshot is not None:
-            image = Image.open(uploaded_screenshot)
-            st.image(image, caption="Uploaded Nexus Odds Screenshot", use_container_width=True)
-            
-            parse_screenshot_btn = st.button("⚡ Parse Screenshot with Vision AI", use_container_width=True)
-            
-            if parse_screenshot_btn:
-                if not gemini_api_key:
-                    st.error("⚠️ Please enter your Gemini API Key in the sidebar to enable Vision parsing.")
-                else:
-                    try:
-                        with st.spinner("🔍 Reading odds and player props from image..."):
-                            client = genai.Client(api_key=gemini_api_key)
-                            prompt = """
-                            Extract all player prop betting lines from this image. Return a clean CSV format with columns:
-                            Matchup, Sportsbook, Player, Market, Line, Odds
-                            Where Market is one of: player_shots_on_goal, player_points, player_goals, player_assists
-                            Line is a float (e.g., 1.5, 2.5, 0.5)
-                            Odds is American odds as an integer (e.g., -140, +125)
-                            Return ONLY valid CSV text, no markdown code blocks.
-                            """
-                            response = client.models.generate_content(
-                                model='gemini-2.5-flash',
-                                contents=[image, prompt]
-                            )
-                            
-                            csv_text = response.text.replace("```csv", "").replace("```", "").strip()
-                            lines = csv_text.split('\n')
-                            parsed_data = []
-                            for l in lines[1:]:
-                                parts = [p.strip() for p in l.split(',')]
-                                if len(parts) >= 6:
-                                    try:
-                                        am_odds = int(parts[5])
-                                        dec_odds = (1.0 + (100 / am_odds)) if am_odds > 0 else (1.0 + (abs(am_odds) / 100))
-                                        parsed_data.append({
-                                            "Matchup": parts[0],
-                                            "Sportsbook": clean_book_title(parts[1]),
-                                            "Player": parts[2],
-                                            "Market": parts[3],
-                                            "Line": float(parts[4]),
-                                            "Decimal Odds": dec_odds,
-                                            "Odds": f"{am_odds:+d}" if am_odds > 0 else f"{am_odds}"
-                                        })
-                                    except:
-                                        continue
-                            
-                            if parsed_data:
-                                st.session_state['nexus_parsed_slate'] = parsed_data
-                                st.success(f"🟢 Successfully extracted {len(parsed_data)} props from your Nexus screenshot!")
-                            else:
-                                st.warning("⚠️ Could not automatically parse structured rows. Try a clearer screenshot.")
-                    except Exception as e:
-                        st.error(f"Vision Parsing Error: {e}")
+        st.subheader("📝 Manual Nexus Odds & Prop Input")
+        st.write("Enter the player props from your Nexus Odds screen below to run them against your NST model projections.")
 
-        if 'nexus_parsed_slate' in st.session_state:
-            all_prop_rows = st.session_state['nexus_parsed_slate']
-            master_df = pd.DataFrame(all_prop_rows)
+        # Default sample row so the table is never empty on load
+        if 'manual_props_df' not in st.session_state:
+            st.session_state['manual_props_df'] = pd.DataFrame([
+                {"Select": False, "Matchup": "TOR @ MTL", "Sportsbook": "FanDuel", "Player": "Auston Matthews", "Market": "player_shots_on_goal", "Line": 3.5, "Odds (+/-)": "+115"}
+            ])
+
+        edited_input_df = st.data_editor(st.session_state['manual_props_df'], num_rows="dynamic", use_container_width=True, key="manual_prop_editor")
+        st.session_state['manual_props_df'] = edited_input_df
+
+        if len(edited_input_df) > 0 and 'raw_player_dfs' in st.session_state:
+            curr_df, prev_df, team_factors = st.session_state['raw_player_dfs']
             
-            st.divider()
-            market_view_choice = st.selectbox(
-                "Select Market to View & Build Parlays From",
-                ["player_shots_on_goal", "player_points", "player_goals", "player_assists"],
-                format_func=lambda x: x.replace("player_", "").replace("_", " ").title(),
-                key="nexus_market_choice"
-            )
-            
-            market_df = master_df[master_df['Market'] == market_view_choice].copy()
+            processed_rows = []
+            for _, r in edited_input_df.iterrows():
+                try:
+                    am_odds = int(r['Odds (+/-)'])
+                    dec_odds = (1.0 + (100 / am_odds)) if am_odds > 0 else (1.0 + (abs(am_odds) / 100))
+                    processed_rows.append({
+                        "Select": r['Select'],
+                        "Matchup": r['Matchup'],
+                        "Sportsbook": r['Sportsbook'],
+                        "Player": r['Player'].strip(),
+                        "Market": r['Market'],
+                        "Line": float(r['Line']),
+                        "Decimal Odds": dec_odds,
+                        "Odds": f"{am_odds:+d}" if am_odds > 0 else f"{am_odds}"
+                    })
+                except:
+                    continue
 
-            col_ef1, col_ef2 = st.columns(2)
-            min_edge_filter = col_ef1.slider(f"Min Edge Filter (%)", min_value=0.0, max_value=30.0, value=0.0, step=0.5, key="nex_min_e")
-            max_edge_filter = col_ef2.slider(f"Max Edge Filter (%)", min_value=5.0, max_value=70.0, value=50.0, step=1.0, key="nex_max_e")
+            if processed_rows:
+                market_df = pd.DataFrame(processed_rows)
+                
+                market_view_choice = st.selectbox(
+                    "Select Market to View & Build Parlays From",
+                    ["player_shots_on_goal", "player_points", "player_goals", "player_assists"],
+                    format_func=lambda x: x.replace("player_", "").replace("_", " ").title(),
+                    key="manual_market_choice"
+                )
+                
+                market_df = market_df[market_df['Market'] == market_view_choice].copy()
 
-            if 'raw_player_dfs' in st.session_state and len(market_df) > 0:
-                curr_df, prev_df, team_factors = st.session_state['raw_player_dfs']
-                target_col = 'Shots' if "shots" in market_view_choice else ('Total Points' if "points" in market_view_choice else ('Goals' if "goals" in market_view_choice else 'Total Assists'))
+                if len(market_df) > 0:
+                    target_col = 'Shots' if "shots" in market_view_choice else ('Total Points' if "points" in market_view_choice else ('Goals' if "goals" in market_view_choice else 'Total Assists'))
 
-                merged_model = pd.merge(curr_df, prev_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
-                merged_model['Player'] = merged_model['Player'].astype(str).str.strip()
-                merged_model['Stat_curr'] = pd.to_numeric(merged_model[f'{target_col}_curr'], errors='coerce').fillna(0)
-                merged_model['Stat_prev'] = pd.to_numeric(merged_model[f'{target_col}_prev'], errors='coerce').fillna(0)
-                
-                gp_prev = pd.to_numeric(merged_model.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
-                gp_curr = pd.to_numeric(merged_model.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
-                
-                merged_model['Baseline_Stat'] = merged_model['Stat_prev'] / gp_prev
-                merged_model['Current_Stat'] = merged_model['Stat_curr'] / gp_curr
-                merged_model['Blended_Proj'] = (merged_model['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100))
-                
-                nst_to_standard = {'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ', 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL', 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'}
-                def clean_team(t_str):
-                    if pd.isna(t_str): return 'UNK'
-                    return nst_to_standard.get(str(t_str).split(',')[-1].strip(), str(t_str).split(',')[-1].strip())
+                    merged_model = pd.merge(curr_df, prev_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+                    merged_model['Player'] = merged_model['Player'].astype(str).str.strip()
+                    merged_model['Stat_curr'] = pd.to_numeric(merged_model[f'{target_col}_curr'], errors='coerce').fillna(0)
+                    merged_model['Stat_prev'] = pd.to_numeric(merged_model[f'{target_col}_prev'], errors='coerce').fillna(0)
                     
-                merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
-                merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
-                merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
-                
-                merged_scan = pd.merge(market_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
-                
-                if len(merged_scan) > 0:
-                    merged_scan['Model_Over_Prob'] = merged_scan.apply(lambda r: poisson_over_prob(r['Matchup_Proj'], r['Line']), axis=1)
-                    merged_scan['Model Over'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
-                    merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
-                    merged_scan['Edge %'] = merged_scan.apply(lambda r: round((r['Model_Over_Prob'] - (1.0 / r['Decimal Odds'])) * 100, 1) if r['Decimal Odds'] > 1.0 else 0.0, axis=1)
+                    gp_prev = pd.to_numeric(merged_model.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
+                    gp_curr = pd.to_numeric(merged_model.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
                     
-                    merged_scan = merged_scan[(merged_scan['Edge %'] >= min_edge_filter) & (merged_scan['Edge %'] <= max_edge_filter)]
-                    merged_scan = merged_scan.sort_values(by='Edge %', ascending=False).reset_index(drop=True)
+                    merged_model['Baseline_Stat'] = merged_model['Stat_prev'] / gp_prev
+                    merged_model['Current_Stat'] = merged_model['Stat_curr'] / gp_curr
+                    merged_model['Blended_Proj'] = (merged_model['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100))
                     
-                    display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over', 'Fair Odds', 'Edge %']].copy()
-                    display_scan.insert(0, 'Select', False)
-                    display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
-                    display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
-                    display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
-                    display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
-                    display_scan.drop(columns=['Matchup_Proj'], inplace=True)
-                    
-                    edited_df = st.data_editor(display_scan, use_container_width=True, height=400, key="nexus_slate_editor")
-                    
-                    checked_rows = edited_df[edited_df['Select'] == True]
-                    if len(checked_rows) > 0:
-                        st.subheader("🚀 Live Checked Slip & Boost Compound Calculator")
-                        combined_dec, combined_true_prob, slip_summary = 1.0, 1.0, []
-                        for idx, row in checked_rows.iterrows():
-                            orig = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (abs(merged_scan['Line'] - float(row['Line'])) < 0.1)]
-                            if len(orig) > 0:
-                                dec, prob = orig.iloc[0]['Decimal Odds'], orig.iloc[0]['Model_Over_Prob']
-                                combined_dec *= dec
-                                combined_true_prob *= prob
-                                slip_summary.append({"Sportsbook": row['Sportsbook'], "Player": row['Player'], "Line": row['Line'], "Odds": row['Odds'], "Model Win Prob": row['Model Over'], "Edge": row['Edge %']})
-                        st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
-                        p_am = int((combined_dec - 1) * 100) if combined_dec >= 2 else int(-100 / (combined_dec - 1))
-                        b_dec = 1 + ((combined_dec - 1) * (1 + (global_boost / 100)))
-                        b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
-                        slip_edge = round((combined_true_prob - (1.0 / combined_dec)) * 100, 1)
+                    def clean_team(t_str):
+                        if pd.isna(t_str): return 'UNK'
+                        raw = str(t_str).split(',')[-1].strip()
+                        return team_to_abbrev.get(raw, raw)
                         
-                        r1, r2, r3, r4 = st.columns(4)
-                        r1.metric("Checked Parlay Odds", f"+{p_am}" if p_am > 0 else f"{p_am}")
-                        r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
-                        r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
-                        r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
-            else:
-                st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
+                    merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
+                    merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
+                    merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
+                    
+                    merged_scan = pd.merge(market_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
+                    
+                    if len(merged_scan) > 0:
+                        merged_scan['Model_Over_Prob'] = merged_scan.apply(lambda r: poisson_over_prob(r['Matchup_Proj'], r['Line']), axis=1)
+                        merged_scan['Model Over'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
+                        merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
+                        merged_scan['Edge %'] = merged_scan.apply(lambda r: round((r['Model_Over_Prob'] - (1.0 / r['Decimal Odds'])) * 100, 1) if r['Decimal Odds'] > 1.0 else 0.0, axis=1)
+                        merged_scan = merged_scan.sort_values(by='Edge %', ascending=False).reset_index(drop=True)
+                        
+                        display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over', 'Fair Odds', 'Edge %']].copy()
+                        display_scan.insert(0, 'Select', False)
+                        display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
+                        display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
+                        display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
+                        display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
+                        display_scan.drop(columns=['Matchup_Proj'], inplace=True)
+                        
+                        st.write("### 📈 Model Evaluation & Edge Matrix:")
+                        st.dataframe(display_scan, use_container_width=True, height=400)
         else:
-            st.info("💡 **Instructions:** Upload a Nexus Odds screenshot above to parse lines.")
+            st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
 
     with tab2:
         st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
