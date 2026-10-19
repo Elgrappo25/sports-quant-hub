@@ -43,8 +43,8 @@ global_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min
 
 st.sidebar.divider()
 st.sidebar.header("🔌 Live Props & Line Shopping")
-available_books = ["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "espnbet", "pinnacle"]
-selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=["draftkings", "fanduel", "betmgm", "bet365", "betrivers", "pinnacle", "espnbet"])
+available_books = ["FanDuel", "DraftKings", "BetMGM", "Bet365", "BetRivers", "ESPN BET", "Pinnacle"]
+selected_books = st.sidebar.multiselect("Select Your Sportsbooks", available_books, default=available_books)
 
 # Shared Math Functions
 def poisson_prob(lam, k):
@@ -122,7 +122,7 @@ if "NHL" in active_sport:
 
     with tab1:
         st.subheader("📝 Checked Players & Nexus Odds Comparator")
-        st.write("Players you check in Tab 2's Master Matrix appear here automatically. Enter their Nexus Odds and lines below to calculate edges and build parlays.")
+        st.write("Players checked in Tab 2 carry over here automatically. Select the sportsbook and type your Nexus Odds below.")
 
         if 'checked_players_from_tab2' in st.session_state and len(st.session_state['checked_players_from_tab2']) > 0:
             active_checked_df = st.session_state['checked_players_from_tab2']
@@ -133,20 +133,46 @@ if "NHL" in active_sport:
                     "Player": r['Player'],
                     "Team": r['Clean_Team'],
                     "Opponent": r['Opponent'],
+                    "Market": r['Market'],
+                    "Line": r['Line'],
                     "Model Proj": round(r['Matchup_Proj'], 2),
                     "Model Prob (%)": r['Model_Over_Prob_%'],
-                    "Sportsbook": "FanDuel",
-                    "Line": 2.5,
-                    "Nexus Odds (+/-)": "+115"
+                    "Sportsbook": available_books[0], 
+                    "Nexus Odds (+/-)": None # Starts completely blank!
                 })
             
             input_df = pd.DataFrame(input_rows)
-            edited_nexus_df = st.data_editor(input_df, use_container_width=True, height=350, key="nexus_odds_comparator_editor")
+            
+            edited_nexus_df = st.data_editor(
+                input_df,
+                use_container_width=True,
+                height=350,
+                key="nexus_odds_comparator_editor",
+                column_config={
+                    "Sportsbook": st.column_config.SelectboxColumn(
+                        "Sportsbook",
+                        help="Select sportsbook for this row",
+                        options=available_books,
+                        required=True
+                    ),
+                    "Nexus Odds (+/-)": st.column_config.NumberColumn(
+                        "Nexus Odds (+/-)",
+                        help="Type American odds (e.g. 115 or -140)",
+                        format="%d",
+                        step=1,
+                        required=False
+                    )
+                }
+            )
             
             processed_nexus_rows = []
             for _, r in edited_nexus_df.iterrows():
                 try:
-                    am_odds = int(r['Nexus Odds (+/-)'])
+                    odds_val = r['Nexus Odds (+/-)']
+                    if pd.isna(odds_val): continue
+                    am_odds = int(odds_val)
+                    if am_odds == 0: continue
+                    
                     dec_odds = (1.0 + (100 / am_odds)) if am_odds > 0 else (1.0 + (abs(am_odds) / 100))
                     
                     match_row = active_checked_df[active_checked_df['Player'] == r['Player']]
@@ -159,6 +185,7 @@ if "NHL" in active_sport:
                             "Sportsbook": r['Sportsbook'],
                             "Player": r['Player'],
                             "Opponent": r['Opponent'],
+                            "Market": r['Market'],
                             "Line": float(r['Line']),
                             "Odds": f"{am_odds:+d}" if am_odds > 0 else f"{am_odds}",
                             "Decimal Odds": dec_odds,
@@ -173,7 +200,7 @@ if "NHL" in active_sport:
                 res_df = pd.DataFrame(processed_nexus_rows).sort_values(by="Edge %", ascending=False).reset_index(drop=True)
                 st.write("### 📈 Evaluated Edges vs Nexus Odds:")
                 
-                display_eval = res_df[['Sportsbook', 'Player', 'Opponent', 'Line', 'Odds', 'Model Prob', 'Edge %']].copy()
+                display_eval = res_df[['Sportsbook', 'Player', 'Opponent', 'Market', 'Line', 'Odds', 'Model Prob', 'Edge %']].copy()
                 display_eval.insert(0, 'Select Parlay', True)
                 
                 edited_eval = st.data_editor(display_eval, use_container_width=True, height=300, key="eval_slip_editor")
@@ -188,7 +215,7 @@ if "NHL" in active_sport:
                             dec, prob = orig.iloc[0]['Decimal Odds'], orig.iloc[0]['Model_Over_Prob']
                             combined_dec *= dec
                             combined_true_prob *= prob
-                            slip_summary.append({"Sportsbook": row['Sportsbook'], "Player": row['Player'], "Line": row['Line'], "Odds": row['Odds'], "Model Win Prob": orig.iloc[0]['Model Prob'], "Edge": f"+{orig.iloc[0]['Edge %']}%"})
+                            slip_summary.append({"Sportsbook": row['Sportsbook'], "Player": row['Player'], "Market": row['Market'], "Line": row['Line'], "Odds": row['Odds'], "Model Win Prob": orig.iloc[0]['Model Prob'], "Edge": f"+{orig.iloc[0]['Edge %']}%"})
                     
                     st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
                     p_am = int((combined_dec - 1) * 100) if combined_dec >= 2 else int(-100 / (combined_dec - 1))
@@ -202,7 +229,7 @@ if "NHL" in active_sport:
                     r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
                     r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
         else:
-            st.info("💡 **Instructions:** Go to **Tab 2**, check the boxes next to your target players on the Master Matrix, and they will automatically appear here to enter your Nexus Odds.")
+            st.info("💡 **Instructions:** Go to **Tab 2**, select your market and line, check the boxes next to your target players, and they will automatically appear here.")
 
     with tab2:
         st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
@@ -321,9 +348,6 @@ if "NHL" in active_sport:
                 if active_teams and 'Clean_Team' in merged_df.columns:
                     merged_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
 
-                # ==========================================
-                # NEW: GAME / MATCHUP SELECTOR FILTER
-                # ==========================================
                 st.divider()
                 if available_matchups:
                     selected_games_filter = st.multiselect(
@@ -386,13 +410,15 @@ if "NHL" in active_sport:
                                 'Player': p_name,
                                 'Clean_Team': cr['Clean_Team'],
                                 'Opponent': cr['Opponent'],
+                                'Market': batch_market,
+                                'Line': target_line_choice,
                                 'Matchup_Proj': p_match.iloc[0]['Matchup_Proj'],
                                 'Model_Over_Prob': p_match.iloc[0]['Model_Over_Prob'],
                                 'Model_Over_Prob_%': p_match.iloc[0]['Model_Over_Prob_%']
                             })
                     if transfer_data:
                         st.session_state['checked_players_from_tab2'] = pd.DataFrame(transfer_data)
-                        st.success(f"✅ Successfully transferred {len(transfer_data)} players to Tab 1!")
+                        st.success(f"✅ Successfully transferred {len(transfer_data)} players to Tab 1 with Market ({batch_market}) and Line (> {target_line_choice})!")
             else:
                 st.warning("Please upload both Player Season Total CSV files.")
         else:
