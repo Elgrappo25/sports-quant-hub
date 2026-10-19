@@ -291,7 +291,7 @@ if "NHL" in active_sport:
                         r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                     # ==========================================
-                    # AUTOMATED SAME-BOOK PARLAY GENERATOR RESTORED
+                    # AUTOMATED PARLAY GENERATOR (CLEANED & SORTED)
                     # ==========================================
                     st.divider()
                     st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -342,16 +342,16 @@ if "NHL" in active_sport:
                                     std_str = f"+{std_am}" if std_am > 0 else f"{std_am}"
                                     generated_slips.append({
                                         "Sportsbook": book_name,
-                                        "Type": parlay_mode.split()[0],
-                                        "Legs": " + | + ".join(leg_descriptions),
+                                        "Compound Edge %": slip_e,  # Front & center!
                                         "Standard Odds": std_str,
                                         f"Boosted Odds (+{global_boost}%)": b_str,
                                         "Model Prob": f"{round(comb_prob * 100, 1)}%",
-                                        "Compound Edge %": slip_e
+                                        "Legs": " + | + ".join(leg_descriptions)
                                     })
                         
                         if generated_slips:
                             parlay_results_df = pd.DataFrame(generated_slips)
+                            # Explicitly sort highest to lowest compound edge
                             parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
                             st.session_state['generated_parlays_cache'] = parlay_results_df
                         else:
