@@ -94,7 +94,7 @@ def clean_book_title(title):
 # ==============================================================================
 if "NHL" in active_sport:
     st.title("🏒 NHL Quant Terminal: Production Suite")
-    st.markdown("### Nexus Screenshot Vision Parser, NST Projections, Poisson Math, and +EV Parlay Generation.")
+    st.markdown("### Nexus Vision Parser, NST Projections, Poisson Math, and +EV Parlay Generation.")
 
     tab1, tab2 = st.tabs([
         "📊 Nexus Vision Parser & +EV Prop Scanner", 
@@ -150,7 +150,7 @@ if "NHL" in active_sport:
                             Return ONLY valid CSV text, no markdown code blocks.
                             """
                             response = client.models.generate_content(
-                                model='gemini-2.5-flash',
+                                model='gemini-3.8-flash',
                                 contents=[image, prompt]
                             )
                             
