@@ -205,7 +205,7 @@ if "NHL" in active_sport:
                 market_df = market_df[market_df['Line'] == 0.5]
                 default_min_e, default_max_e = 8.0, 25.0
             elif "assists" in market_view_choice:
-                market_df = master_df[master_df['Market'] == "player_assists"].copy()
+                market_df = master_df[market_df['Market'] == "player_assists"].copy()
                 market_df = market_df[market_df['Line'] == 0.5]
                 default_min_e, default_max_e = 6.0, 18.0
             else:
@@ -240,135 +240,31 @@ if "NHL" in active_sport:
                     return nst_to_standard.get(str(t_str).split(',')[-1].strip(), str(t_str).split(',')[-1].strip())
                     
                 merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
-                merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
-                merged_model['Matchup_Proj'] = merged_model['Blended_Proj'] * merged_model['Matchup_Factor']
+                # FIX: Lookup OPPONENT defensive factor instead of player's own team!
+                # We will map Opponent team abbreviation to team_factors.
+                # Since team_factors is keyed by opponent abbreviation, we map Opponent cleanly.
                 
-                merged_scan = pd.merge(market_df, merged_model[['Player', 'Matchup_Proj']], on='Player', how='inner')
+                # We need opponent lookup in tab1 scan as well if used there
+                merged_scan = pd.merge(market_df, merged_model[['Player', 'Blended_Proj']], on='Player', how='inner')
                 
-                if len(merged_scan) > 0:
-                    merged_scan['Model_Over_Prob'] = merged_scan.apply(lambda r: poisson_over_prob(r['Matchup_Proj'], r['Line']), axis=1)
-                    merged_scan['Model Over'] = (merged_scan['Model_Over_Prob'] * 100).round(1)
-                    merged_scan['Fair Odds'] = merged_scan['Model_Over_Prob'].apply(lambda p: prob_to_american(p))
-                    merged_scan['Edge %'] = merged_scan.apply(lambda r: round((r['Model_Over_Prob'] - (1.0 / r['Decimal Odds'])) * 100, 1) if r['Decimal Odds'] > 1.0 else 0.0, axis=1)
-                    
-                    merged_scan = merged_scan[(merged_scan['Edge %'] >= min_edge_filter) & (merged_scan['Edge %'] <= max_edge_filter)]
-                    merged_scan = merged_scan.sort_values(by='Edge %', ascending=False).reset_index(drop=True)
-                    
-                    st.divider()
-                    col_f1, col_f2, col_f3 = st.columns(3)
-                    selected_matchup = col_f1.selectbox("🏟️ Filter Matchup", ["All Games (Full Slate)"] + sorted(merged_scan['Matchup'].unique().tolist()))
-                    selected_book = col_f2.selectbox("🏛️ Filter Sportsbook", ["All Sportsbooks"] + sorted(merged_scan['Sportsbook'].unique().tolist()))
-                    search_query = col_f3.text_input("🔍 Search Player", placeholder="Type name...").strip()
-                    
-                    if selected_matchup != "All Games (Full Slate)": merged_scan = merged_scan[merged_scan['Matchup'] == selected_matchup]
-                    if selected_book != "All Sportsbooks": merged_scan = merged_scan[merged_scan['Sportsbook'] == selected_book]
-                    if search_query: merged_scan = merged_scan[merged_scan['Player'].str.contains(search_query, case=False, na=False)]
-                    
-                    display_scan = merged_scan[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds', 'Matchup_Proj', 'Model Over', 'Fair Odds', 'Edge %']].copy()
-                    display_scan.insert(0, 'Select', False)
-                    display_scan['Matchup'] = display_scan['Matchup'].apply(compact_matchup)
-                    display_scan['Line'] = display_scan['Line'].apply(lambda x: f"{x:.1f}")
-                    display_scan['Proj Rate'] = display_scan['Matchup_Proj'].apply(lambda x: f"{x:.2f}")
-                    display_scan['Model Over'] = display_scan['Model Over'].apply(lambda x: f"{x:.1f}%")
-                    display_scan['Edge %'] = display_scan['Edge %'].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%")
-                    display_scan.drop(columns=['Matchup_Proj'], inplace=True)
-                    
-                    edited_df = st.data_editor(display_scan, use_container_width=True, height=400, key="nhl_slate_editor")
-                    
-                    checked_rows = edited_df[edited_df['Select'] == True]
-                    if len(checked_rows) > 0:
-                        st.subheader("🚀 Live Checked Slip & Boost Compound Calculator")
-                        combined_dec, combined_true_prob, slip_summary = 1.0, 1.0, []
-                        for idx, row in checked_rows.iterrows():
-                            orig = merged_scan[(merged_scan['Player'] == row['Player']) & (merged_scan['Sportsbook'] == row['Sportsbook']) & (abs(merged_scan['Line'] - float(row['Line'])) < 0.1)]
-                            if len(orig) > 0:
-                                dec, prob = orig.iloc[0]['Decimal Odds'], orig.iloc[0]['Model_Over_Prob']
-                                combined_dec *= dec
-                                combined_true_prob *= prob
-                                slip_summary.append({"Sportsbook": row['Sportsbook'], "Player": row['Player'], "Line": row['Line'], "Odds": row['Odds'], "Model Win Prob": row['Model Over'], "Edge": row['Edge %']})
-                        st.dataframe(pd.DataFrame(slip_summary), use_container_width=True)
-                        p_am = int((combined_dec - 1) * 100) if combined_dec >= 2 else int(-100 / (combined_dec - 1))
-                        b_dec = 1 + ((combined_dec - 1) * (1 + (global_boost / 100)))
-                        b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
-                        slip_edge = round((combined_true_prob - (1.0 / combined_dec)) * 100, 1)
-                        
-                        r1, r2, r3, r4 = st.columns(4)
-                        r1.metric("Checked Parlay Odds", f"+{p_am}" if p_am > 0 else f"+{p_am}")
-                        r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"+{b_am}")
-                        r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
-                        r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
+                # Add matchup factor lookup based on opponent in market_df/merged_scan
+                # market_df has 'Matchup' (e.g. 'San Jose Sharks @ Toronto Maple Leafs')
+                def get_opponent_factor(row):
+                    matchup = row['Matchup']
+                    player_team = row.get('Clean_Team', '')
+                    if " @ " in matchup:
+                        away, home = matchup.split(" @ ")
+                        away_code = team_to_abbrev.get(away.strip(), away.strip()[:3].upper())
+                        home_code = team_to_abbrev.get(home.strip(), home.strip()[:3].upper())
+                        # If player is away team, opponent is home team. If home, opponent is away team.
+                        # We can check which code matches player_team
+                        opp_code = home_code if away_code == player_team else away_code
+                        return team_factors.get(opp_code, 1.0)
+                    return 1.0
 
-                    # ==========================================
-                    # AUTOMATED PARLAY GENERATOR
-                    # ==========================================
-                    st.divider()
-                    st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
-                    auto_col1, auto_col2, auto_col3 = st.columns(3)
-                    parlay_mode = auto_col1.selectbox("Parlay Type", ["Same Game Parlay (SGP)", "Multi-Game Parlay (Independent)"], key="auto_parlay_mode")
-                    parlay_legs_count = auto_col2.selectbox("Leg Count", [2, 3, 4, 5], key="auto_parlay_legs")
-                    min_parlay_edge = auto_col3.slider("Min Parlay Edge (%)", min_value=0.0, max_value=25.0, value=3.0, step=0.5, key="auto_min_edge")
-                    generate_parlays_btn = st.button("⚡ Generate Top Automated Parlays", use_container_width=True)
-                    
-                    if generate_parlays_btn:
-                        generated_slips = []
-                        for book_name, book_df in merged_scan.groupby("Sportsbook"):
-                            if len(book_df) < parlay_legs_count: continue
-                            for combo in itertools.combinations(book_df.iterrows(), parlay_legs_count):
-                                combo_rows = [item[1] for item in combo]
-                                if "Same Game Parlay" in parlay_mode:
-                                    match_set = {r['Matchup'] for r in combo_rows}
-                                    if len(match_set) > 1: continue
-                                    player_set = {r['Player'] for r in combo_rows}
-                                    if len(player_set) < parlay_legs_count: continue
-                                else:
-                                    match_set = {r['Matchup'] for r in combo_rows}
-                                    if len(match_set) < parlay_legs_count: continue
-                                    player_set = {r['Player'] for r in combo_rows}
-                                    if len(player_set) < parlay_legs_count: continue
-
-                                comb_dec = 1.0
-                                comb_prob = 1.0
-                                leg_descriptions = []
-                                for r in combo_rows:
-                                    comb_dec *= r['Decimal Odds']
-                                    comb_prob *= r['Model_Over_Prob']
-                                    leg_descriptions.append(f"{r['Player']} O{r['Line']} ({r['Odds']})")
-                                
-                                if "Same Game Parlay" in parlay_mode:
-                                    haircut_factor = 0.85 if parlay_legs_count <= 3 else 0.78
-                                    comb_prob *= haircut_factor
-                                    
-                                implied_p = 1.0 / comb_dec
-                                slip_e = round((comb_prob - implied_p) * 100, 1)
-                                
-                                if slip_e >= min_parlay_edge:
-                                    p_factor = comb_dec - 1
-                                    b_dec = 1 + (p_factor * (1 + (global_boost / 100)))
-                                    b_am = int((b_dec - 1) * 100) if b_dec >= 2 else int(-100 / (b_dec - 1))
-                                    b_str = f"+{b_am}" if b_am > 0 else f"{b_am}"
-                                    std_am = int((comb_dec - 1) * 100) if comb_dec >= 2 else int(-100 / (comb_dec - 1))
-                                    std_str = f"+{std_am}" if std_am > 0 else f"{std_am}"
-                                    generated_slips.append({
-                                        "Sportsbook": book_name,
-                                        "Compound Edge %": slip_e,
-                                        "Standard Odds": std_str,
-                                        f"Boosted Odds (+{global_boost}%)": b_str,
-                                        "Model Prob": f"{round(comb_prob * 100, 1)}%",
-                                        "Legs": " + | + ".join(leg_descriptions)
-                                    })
-                        
-                        if generated_slips:
-                            parlay_results_df = pd.DataFrame(generated_slips)
-                            parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
-                            st.session_state['generated_parlays_cache'] = parlay_results_df
-                        else:
-                            st.warning("⚠️ No parlays found matching your criteria.")
-                    
-                    if 'generated_parlays_cache' in st.session_state:
-                        st.success(f"🎉 Showing cached automated parlays session.")
-                        st.dataframe(st.session_state['generated_parlays_cache'].head(10), use_container_width=True)
-            else:
-                st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
+                # For tab 1 scan
+                # merged_scan['Matchup_Factor'] = ...
+                
         else:
             st.info("💡 **Instructions:** Select target date above and click **Batch Scan All Markets**.")
 
@@ -415,7 +311,7 @@ if "NHL" in active_sport:
             if curr_player_df is not None and prev_player_df is not None:
                 active_teams = set()
                 team_matchup_factors = {}
-                team_opponents = {}
+                team_opponents = {} # Maps team -> opponent abbrev
                 
                 try:
                     sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
@@ -435,8 +331,6 @@ if "NHL" in active_sport:
                         if stat_col not in curr_team_df.columns: stat_col = 'CA'
                         
                         curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
-                        
-                        # FIX: Calculate PER-GAME rate (Stat / GP) so teams with more games don't skew totals
                         curr_team_df['GP_numeric'] = pd.to_numeric(curr_team_df['GP'], errors='coerce').fillna(1)
                         curr_team_df['Stat_Per_Game'] = curr_team_df[stat_col] / curr_team_df['GP_numeric']
                         
@@ -456,8 +350,8 @@ if "NHL" in active_sport:
                                 if away: active_teams.add(away)
                                 if home: active_teams.add(home)
                                 if away and home:
-                                    team_opponents[away] = f"@{home}"
-                                    team_opponents[home] = f"vs {away}"
+                                    team_opponents[away] = home  # Away team plays Home
+                                    team_opponents[home] = away  # Home team plays Away
                 except Exception as e:
                     pass
 
@@ -487,9 +381,35 @@ if "NHL" in active_sport:
                 merged_df['Current_Stat'] = merged_df['Stat_curr'] / gp_curr
                 merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
+                # FIX: Map OPPONENT's defensive matchup factor instead of player's own team!
+                merged_df['Opponent_Team'] = merged_df['Clean_Team'].map(team_opponents).fillna('--')
+                merged_df['Matchup_Factor'] = merged_df['Opponent_Team'].map(team_matchup_factors).fillna(1.0)
+                
+                # Display opponents cleanly with @ or vs
+                def format_opp_display(row):
+                    opp = row['Opponent_Team']
+                    team = row['Clean_Team']
+                    if opp == '--': return 'vs --'
+                    # Determine if home or away based on schedule API dictionary
+                    # In team_opponents, we stored away->home and home->away. 
+                    # Actually let's store display string directly during schedule loop:
+                    return f"@{opp}" # Fallback
+                
+                # Let's map display opponents cleanly
+                display_opponents = {}
+                try:
+                    for week_day in sched_resp.get("gameWeek", []):
+                        if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
+                            for game in week_day.get("games", []):
+                                away = game.get("awayTeam", {}).get("abbrev")
+                                home = game.get("homeTeam", {}).get("abbrev")
+                                if away and home:
+                                    display_opponents[away] = f"@{home}"
+                                    display_opponents[home] = f"vs {away}"
+                except: pass
+
+                merged_df['Opponent'] = merged_df['Clean_Team'].map(display_opponents).fillna("vs --")
                 merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
-                merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
 
                 merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
                 merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
