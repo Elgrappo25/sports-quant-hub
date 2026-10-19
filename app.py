@@ -368,7 +368,7 @@ with tab1:
                     res_col4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                 # ==========================================
-                # AUTOMATED SAME-BOOK PARLAY GENERATOR (WIDE LEGS CONFIG)
+                # AUTOMATED SAME-BOOK PARLAY GENERATOR
                 # ==========================================
                 st.divider()
                 st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -433,7 +433,6 @@ with tab1:
                         parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
                         st.success(f"🎉 Generated **{len(parlay_results_df)}** profitable automated parlays!")
                         
-                        # Use column_config to give the Legs column a large, wide layout so nothing gets cut off!
                         st.dataframe(
                             parlay_results_df.head(10),
                             column_config={
@@ -648,7 +647,7 @@ with tab2:
 
             st.dataframe(
                 final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'], subset=['Model_Over_Prob_%']),
+                           .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                 use_container_width=True,
                 height=500
             )
