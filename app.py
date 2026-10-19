@@ -124,7 +124,7 @@ if "NHL" in active_sport:
 
     with tab1:
         st.subheader("📸 Nexus Odds Screenshot Vision Uploader")
-        st.write("Upload a screenshot from Nexus Odds showing multiple sportsbooks. Our Vision parser will automatically extract the players, lines, and odds across all books.")
+        st.write("Upload a screenshot from Nexus Odds. For best results, capture the full list of players visible on your screen.")
         
         uploaded_screenshot = st.file_uploader("Upload Nexus Odds Screenshot", type=["png", "jpg", "jpeg"], key="nexus_screenshot_drop")
         
@@ -139,15 +139,16 @@ if "NHL" in active_sport:
                     st.error("⚠️ Please enter your Gemini API Key in the sidebar to enable Vision parsing.")
                 else:
                     try:
-                        with st.spinner("🔍 Reading odds and player props from image..."):
+                        with st.spinner("🔍 Reading all player props and sportsbooks from image..."):
                             client = genai.Client(api_key=gemini_api_key)
                             prompt = """
-                            Extract all player prop betting lines from this image across all sportsbooks shown. Return a clean CSV format with columns:
+                            Examine this sports betting odds screenshot exhaustively from top to bottom. Extract EVERY SINGLE player prop row visible for every sportsbook shown.
+                            Return a clean CSV format with columns:
                             Matchup, Sportsbook, Player, Market, Line, Odds
                             Where Market is one of: player_shots_on_goal, player_points, player_goals, player_assists
                             Line is a float (e.g., 1.5, 2.5, 0.5)
                             Odds is American odds as an integer (e.g., -140, +125)
-                            Return ONLY valid CSV text, no markdown code blocks.
+                            Do NOT skip any players or rows. Return ONLY valid CSV text, no markdown code blocks.
                             """
                             response = client.models.generate_content(
                                 model='gemini-3.8-flash',
@@ -177,7 +178,7 @@ if "NHL" in active_sport:
                             
                             if parsed_data:
                                 st.session_state['nexus_parsed_slate'] = parsed_data
-                                st.success(f"🟢 Successfully extracted {len(parsed_data)} props from your Nexus screenshot!")
+                                st.success(f"🟢 Successfully extracted {len(parsed_data)} prop lines across all players from your screenshot!")
                             else:
                                 st.warning("⚠️ Could not automatically parse structured rows. Try a clearer screenshot.")
                     except Exception as e:
@@ -279,7 +280,7 @@ if "NHL" in active_sport:
                         r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                     # ==========================================
-                    # AUTOMATED PARLAY GENERATOR
+                    # AUTOMATED PARLAY GENERATOR (UN-SQUISHED CARDS)
                     # ==========================================
                     st.divider()
                     st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -334,7 +335,7 @@ if "NHL" in active_sport:
                                         "Standard Odds": std_str,
                                         f"Boosted Odds (+{global_boost}%)": b_str,
                                         "Model Prob": f"{round(comb_prob * 100, 1)}%",
-                                        "Legs": " + | + ".join(leg_descriptions)
+                                        "Legs": " | ".join(leg_descriptions)
                                     })
                         
                         if generated_slips:
@@ -345,8 +346,16 @@ if "NHL" in active_sport:
                             st.warning("⚠️ No parlays found matching your criteria.")
                     
                     if 'generated_parlays_cache' in st.session_state:
-                        st.success(f"🎉 Showing cached automated parlays session.")
-                        st.dataframe(st.session_state['generated_parlays_cache'].head(10), use_container_width=True)
+                        st.success(f"🎉 Top Automated Parlays (Ranked by Edge):")
+                        cached_parlays = st.session_state['generated_parlays_cache'].head(5)
+                        for idx, p_row in cached_parlays.iterrows():
+                            with st.container(border=True):
+                                col_p1, col_p2, col_p3, col_p4 = st.columns([2, 2, 2, 3])
+                                col_p1.markdown(f"**🏛️ Book:** {p_row['Sportsbook']}")
+                                col_p2.markdown(f"**📈 Edge:** `+{p_row['Compound Edge %']}%`")
+                                col_p3.markdown(f"**💰 Odds:** `{p_row['Standard Odds']}` (Boost: `{p_row[f'Boosted Odds (+{global_boost}%)']}`)")
+                                col_p4.markdown(f"**🎯 Prob:** `{p_row['Model Prob']}`")
+                                st.markdown(f"**📋 Legs:** {p_row['Legs']}")
             else:
                 st.info("ℹ️ **Model Data Needed:** Please load your 4 Natural Stat Trick CSV files in Tab 2 first.")
         else:
@@ -443,7 +452,7 @@ if "NHL" in active_sport:
                 merged_df['Stat_curr'] = pd.to_numeric(merged_df[f'{target_col}_curr'], errors='coerce').fillna(0)
                 merged_df['Stat_prev'] = pd.to_numeric(merged_df[f'{prev_col}_prev'], errors='coerce').fillna(0)
                 
-                gp_prev = pd.to_numeric(merged_df.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
+                gp_prev = pd.to_numeric(merged_model.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82) if 'merged_model' in locals() else 82
                 gp_curr = pd.to_numeric(merged_df.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
                 
                 merged_df = merged_df[gp_curr >= min_gp].copy()
