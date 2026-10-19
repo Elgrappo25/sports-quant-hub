@@ -4,6 +4,7 @@ import requests
 import math
 from datetime import date
 import itertools
+import nfl_data_py as nfl
 
 st.set_page_config(page_title="Sports Quant Hub - Multi-Sport Terminal", page_icon="🏆", layout="wide")
 
@@ -364,16 +365,14 @@ elif "NFL" in active_sport:
         st.write("Player statistics update automatically via open-source weekly releases every Wednesday morning.")
         nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025], index=0)
         
-        load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
+        load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_control_width=True if 'use_control_width' in globals() else False)
         if load_nfl_btn or 'nfl_master_df' not in st.session_state:
             try:
-                # Fixed release URL pointing directly to the official nflverse weekly player stats dataset
-                url = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{nfl_season_input}.csv"
-                nfl_raw = pd.read_csv(url)
+                nfl_raw = nfl.import_weekly_data([nfl_season_input])
                 st.session_state['nfl_master_df'] = nfl_raw
                 st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
             except Exception as e:
-                st.warning(f"⚠️ Could not automatically fetch live CSV: {e}. Check back after season games initialize.")
+                st.warning(f"⚠️ Could not automatically fetch weekly data yet: {e}. Check back after season games initialize.")
 
         if 'nfl_master_df' in st.session_state:
             st.metric("Total Player Week Records Loaded", len(st.session_state['nfl_master_df']))
