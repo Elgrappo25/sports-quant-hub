@@ -21,7 +21,7 @@ st.markdown("""
 st.sidebar.header("🏆 Master Sport Terminal")
 active_sport = st.sidebar.selectbox(
     "Select Active Sport", 
-    ["🏒 NHL (Active)", "🏈 NFL (NST-Style Terminal)"],
+    ["🏒 NHL (Active)", "🏈 NFL (Paused)"],
     key="master_sport_switch"
 )
 st.sidebar.divider()
@@ -295,14 +295,34 @@ if "NHL" in active_sport:
             st.info("💡 **Instructions:** Select target date above and click **Batch Scan All Markets**.")
 
     with tab2:
-        st.subheader("Single Dropzone: Multi-File NST Processor")
-        batch_market = st.selectbox("Select Target Prop Market", ["Shots on Goal (SOG)", "Points (G+A)", "Anytime Goal Scorer", "Assists Only"], key="nhl_batch_market")
-        target_line_choice = st.selectbox("Select Target Threshold Line", [0.5, 1.5, 2.5, 3.5, 4.5, 5.5], index=1, key="nhl_alt_line")
-        target_date = st.date_input("Target Slate Date", value=date.today(), key="nhl_target_date")
-        uploaded_files = st.file_uploader("Drop all 4 Natural Stat Trick CSV files here", type="csv", accept_multiple_files=True, key="nhl_nst_drop")
+        st.subheader("Single Dropzone: Multi-File NST Processor & Market-Tailored Matrix")
+        st.write("Drop your 4 Natural Stat Trick count files below. Color coding is custom-tailored to each specific betting market.")
+        
+        batch_market = st.selectbox(
+            "Select Target Prop Market", 
+            ["Shots on Goal (SOG)", "Points (G+A)", "Anytime Goal Scorer", "Assists Only"],
+            key="multi_batch_market"
+        )
+        
+        target_line_choice = st.selectbox(
+            "Select Target Threshold Line for Alt Matrix",
+            [0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
+            index=1,
+            key="batch_alt_line"
+        )
+        
+        target_date = st.date_input("Target Slate Date", value=date.today(), key="batch_target_date")
+        
+        uploaded_files = st.file_uploader(
+            "Drop all 4 Natural Stat Trick CSV files here", 
+            type="csv", 
+            accept_multiple_files=True,
+            key="multi_nst_drop"
+        )
         
         if uploaded_files:
-            curr_player_df, prev_player_df, curr_team_df = None, None, None
+            curr_player_df, prev_player_df, curr_team_df, prev_team_df = None, None, None, None
+            
             for file in uploaded_files:
                 fname = file.name.lower()
                 if "player" in fname:
@@ -312,173 +332,116 @@ if "NHL" in active_sport:
                 elif "games" in fname:
                     temp_df = pd.read_csv(file)
                     if 'GP' in temp_df.columns and temp_df['GP'].max() <= 20: curr_team_df = temp_df
+                    else: prev_team_df = temp_df
                     
             if curr_player_df is not None and prev_player_df is not None:
+                nst_to_standard = {'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ', 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL', 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'}
+                def clean_team(team_str):
+                    if pd.isna(team_str): return 'UNK'
+                    return nst_to_standard.get(str(team_str).split(',')[-1].strip(), str(team_str).split(',')[-1].strip())
+
+                active_teams = set()
                 team_matchup_factors = {}
+                team_opponents = {}
+                
                 try:
-                    sched_resp = requests.get(f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}").json()
+                    sched_url = f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}"
+                    sched_resp = requests.get(sched_url).json()
+                    
                     if curr_team_df is not None and 'Team' in curr_team_df.columns:
-                        f_std = {'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF', 'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY', 'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL', 'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA', 'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL', 'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI', 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI', 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA', 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'}
-                        curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(f_std)
+                        curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map({'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF', 'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY', 'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL', 'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA', 'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL', 'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI', 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI', 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA', 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'})
                         stat_col = 'SA' if batch_market == "Shots on Goal (SOG)" else ('HDCA' if batch_market == "Anytime Goal Scorer" else 'SCA')
                         if stat_col not in curr_team_df.columns: stat_col = 'CA'
+                        curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
                         mean_val = curr_team_df[stat_col].mean() if stat_col in curr_team_df.columns else 1.0
                         for _, row in curr_team_df.iterrows():
-                            if pd.notnull(row['Standard_Abbrev']):
-                                factor = row.get(stat_col, mean_val) / mean_val if mean_val > 0 else 1.0
-                                team_matchup_factors[row['Standard_Abbrev']] = max(0.80, min(1.20, factor))
-                except: pass
+                            t_abbrev = row['Standard_Abbrev']
+                            factor = row.get(stat_col, mean_val) / mean_val if mean_val > 0 else 1.0
+                            if pd.notnull(t_abbrev): team_matchup_factors[t_abbrev] = max(0.80, min(1.20, factor))
+
+                    for week_day in sched_resp.get("gameWeek", []):
+                        if week_day.get("date") == target_date.strftime('%Y-%m-%d'):
+                            for game in week_day.get("games", []):
+                                away = game.get("awayTeam", {}).get("abbrev")
+                                home = game.get("homeTeam", {}).get("abbrev")
+                                if away: active_teams.add(away)
+                                if home: active_teams.add(home)
+                                if away and home:
+                                    team_opponents[away] = f"@{home}"
+                                    team_opponents[home] = f"vs {away}"
+                except Exception as e:
+                    pass
 
                 target_col = 'Shots' if batch_market == "Shots on Goal (SOG)" else ('Total Points' if batch_market == "Points (G+A)" else ('Goals' if batch_market == "Anytime Goal Scorer" else 'Total Assists'))
+                prev_col = target_col
+
                 st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
-                
+
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+                merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
+                
                 merged_df['Stat_curr'] = pd.to_numeric(merged_df[f'{target_col}_curr'], errors='coerce').fillna(0)
-                merged_df['Stat_prev'] = pd.to_numeric(merged_df[f'{target_col}_prev'], errors='coerce').fillna(0)
+                merged_df['Stat_prev'] = pd.to_numeric(merged_df[f'{prev_col}_prev'], errors='coerce').fillna(0)
                 
                 gp_prev = pd.to_numeric(merged_df.get('GP_prev', 82), errors='coerce').replace(0, 1).fillna(82)
                 gp_curr = pd.to_numeric(merged_df.get('GP_curr', 5), errors='coerce').replace(0, 1).fillna(5)
+                
                 merged_df = merged_df[gp_curr >= min_gp].copy()
                 
-                merged_df['Blended_Proj'] = ((merged_df['Stat_prev'] / gp_prev) * (1 - (season_weight / 100))) + ((merged_df['Stat_curr'] / gp_curr) * (season_weight / 100))
+                merged_df['Baseline_Stat'] = merged_df['Stat_prev'] / gp_prev
+                merged_df['Current_Stat'] = merged_df['Stat_curr'] / gp_curr
+                merged_df['Blended_Proj'] = (merged_df['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_df['Current_Stat'] * (season_weight / 100))
                 
-                st.success(f"🟢 Loaded {len(merged_df)} players successfully for NHL model!")
+                merged_df['Matchup_Factor'] = merged_df['Clean_Team'].map(team_matchup_factors).fillna(1.0)
+                merged_df['Matchup_Proj'] = merged_df['Blended_Proj'] * merged_df['Matchup_Factor']
+                merged_df['Opponent'] = merged_df['Clean_Team'].map(team_opponents).fillna("vs --")
+
+                merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
+                merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
+                merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
+                
+                filter_slate = st.checkbox("Filter by Today's Active Slate Only", value=True)
+                if filter_slate and active_teams and 'Clean_Team' in merged_df.columns:
+                    filtered_df = merged_df[merged_df['Clean_Team'].isin(active_teams)].copy()
+                    if len(filtered_df) > 0:
+                        merged_df = filtered_df
+                        st.success(f"📅 **Slate Filter Active:** Showing **{len(merged_df)} players** (min {min_gp} GP) playing on {target_date}.")
+                
+                st.write(f"### 📈 Slate Alt-Line Matrix ({batch_market} > {target_line_choice}):")
+                display_cols = ['Player', 'Clean_Team', 'Opponent', 'Baseline_Stat', 'Current_Stat', 'Matchup_Factor', 'Matchup_Proj', 'Model_Over_Prob_%', 'Fair_American_Odds']
+                
+                final_board = merged_df[display_cols].sort_values(by='Matchup_Proj', ascending=False).reset_index(drop=True)
+
+                def color_matrix_cells(val, col_name):
+                    if isinstance(val, (int, float)):
+                        if col_name == 'Matchup_Factor':
+                            if val > 1.05: return 'color: #00E676; font-weight: bold;'
+                            elif val < 0.95: return 'color: #FF5252; font-weight: bold;'
+                        elif col_name == 'Model_Over_Prob_%':
+                            if batch_market == "Anytime Goal Scorer": green_thresh, red_thresh = 42.0, 32.0
+                            elif batch_market == "Points (G+A)": green_thresh, red_thresh = (72.0 if target_line_choice <= 0.5 else 45.0), 50.0
+                            elif batch_market == "Assists Only": green_thresh, red_thresh = (65.0 if target_line_choice <= 0.5 else 40.0), 45.0
+                            else: green_thresh, red_thresh = (55.0 if target_line_choice >= 2.5 else 75.0), 40.0
+                            
+                            if val >= green_thresh: return 'color: #00E676; font-weight: bold;'
+                            elif val <= red_thresh: return 'color: #FF5252; font-weight: bold;'
+                    return 'color: #CFD8DC;'
+
+                st.dataframe(
+                    final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
+                               .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                    use_container_width=True,
+                    height=500
+                )
             else:
                 st.warning("Please upload both Player Season Total CSV files.")
-
+        else:
+            st.info("💡 **Instructions:** Drop all 4 files above to generate color-coded alt-line projections.")
 
 # ==============================================================================
-# FOOTBALL (NFL) PIPELINE (PBP AGGREGATION TO SEASON TOTALS)
+# FOOTBALL (NFL) PLACEHOLDER
 # ==============================================================================
 elif "NFL" in active_sport:
-    st.title("🏈 NFL Quant Terminal: Production Suite")
-    st.markdown("### Aggregating play-by-play stats into season totals, batch scanning props, and parlay building.")
-
-    tab_nfl1, tab_nfl2 = st.tabs([
-        "📊 Automated +EV NFL Prop Scanner & Parlay Builder", 
-        "📁 NFL PBP Aggregator & Data Status"
-    ])
-
-    with tab_nfl2:
-        st.subheader("NFL Play-by-Play Aggregator")
-        st.write("Drop your `pbp-2026.csv` file below. The model will automatically aggregate every play into clean, season-to-date player totals (Passing Yards, Rushing Yards, Receptions, Receiving Yards, Touchdowns).")
-        
-        nfl_uploaded_file = st.file_uploader(
-            "Drop pbp-2026.csv here", 
-            type="csv", 
-            key="nfl_pbp_drop"
-        )
-        
-        if nfl_uploaded_file is not None:
-            try:
-                pbp_df = pd.read_csv(nfl_uploaded_file, low_memory=False)
-                
-                # Aggregate Passing
-                pass_agg = pbp_df.groupby('passer_player_name').agg(
-                    pass_yds=('passing_yards', 'sum'),
-                    pass_tds=('pass_touchdown', 'sum'),
-                    games=('game_id', 'nunique')
-                ).reset_index().rename(columns={'passer_player_name': 'Player'})
-
-                # Aggregate Rushing
-                rush_agg = pbp_df.groupby('rusher_player_name').agg(
-                    rush_yds=('rushing_yards', 'sum'),
-                    rush_tds=('rush_touchdown', 'sum'),
-                    carries=('rush_attempt', 'sum')
-                ).reset_index().rename(columns={'rusher_player_name': 'Player'})
-
-                # Aggregate Receiving
-                rec_agg = pbp_df.groupby('receiver_player_name').agg(
-                    rec_yds=('receiving_yards', 'sum'),
-                    receptions=('complete_pass', 'sum'),
-                    rec_tds=('pass_touchdown', 'sum')
-                ).reset_index().rename(columns={'receiver_player_name': 'Player'})
-
-                # Save aggregated master table into session state
-                st.session_state['nfl_agg_player_df'] = {'pass': pass_agg, 'rush': rush_agg, 'rec': rec_agg}
-                st.success(f"🟢 Successfully aggregated play-by-play data into season totals for {len(pass_agg)} passers, {len(rush_agg)} rushers, and {len(rec_agg)} receivers!")
-            except Exception as e:
-                st.error(f"⚠️ Error processing PBP file: {e}")
-
-        if 'nfl_agg_player_df' in st.session_state:
-            agg_data = st.session_state['nfl_agg_player_df']
-            st.write("### 📋 Season-to-Date Passing Leaders:")
-            st.dataframe(agg_data['pass'].sort_values(by='pass_yds', ascending=False).head(15), use_container_width=True)
-            
-            st.write("### 📋 Season-to-Date Rushing Leaders:")
-            st.dataframe(agg_data['rush'].sort_values(by='rush_yds', ascending=False).head(15), use_container_width=True)
-
-            st.write("### 📋 Season-to-Date Receiving Leaders:")
-            st.dataframe(agg_data['rec'].sort_values(by='rec_yds', ascending=False).head(15), use_container_width=True)
-        else:
-            st.info("💡 **Instructions:** Drop your `pbp-2026.csv` file above to generate aggregated season totals.")
-
-    with tab_nfl1:
-        col_nfl_s1, col_nfl_s2 = st.columns([2, 1])
-        target_nfl_date = col_nfl_s1.date_input("📅 Target NFL Slate Date", value=date.today(), key="nfl_date_picker")
-        fetch_nfl_odds_btn = col_nfl_s2.button("🔄 Batch Scan NFL Markets", use_container_width=True)
-
-        all_nfl_rows = []
-        if fetch_nfl_odds_btn:
-            if not api_key_input:
-                st.error("⚠️ Please enter your Odds API Key in the sidebar first.")
-            else:
-                try:
-                    events_url = f"https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events?apiKey={api_key_input}"
-                    ev_resp = requests.get(events_url, timeout=8)
-                    if ev_resp.status_code == 200:
-                        events_list = ev_resp.json()
-                        books_str = ",".join(selected_books)
-                        nfl_markets = "player_pass_yds,player_rush_yds,player_reception_yds,player_receptions,player_anytime_td,player_pass_yds_alternate,player_rush_yds_alternate,player_reception_yds_alternate"
-                        
-                        progress_bar = st.progress(0)
-                        scanned_count = 0
-                        target_date_str = target_nfl_date.strftime('%Y-%m-%d')
-
-                        for idx, ev in enumerate(events_list):
-                            if target_date_str not in ev.get('commence_time', ''): continue
-                            scanned_count += 1
-                            ev_id = ev['id']
-                            matchup_str = f"{ev['away_team']} @ {ev['home_team']}"
-                            
-                            prop_url = f"https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events/{ev_id}/odds?apiKey={api_key_input}&regions=us,us2&markets={nfl_markets}&bookmakers={books_str}"
-                            resp = requests.get(prop_url, timeout=6)
-                            if resp.status_code == 200:
-                                game_data = resp.json()
-                                for bookmaker in game_data.get('bookmakers', []):
-                                    b_title = clean_book_title(bookmaker['title'])
-                                    for market in bookmaker.get('markets', []):
-                                        m_key = market.get('key')
-                                        for outcome in market.get('outcomes', []):
-                                            if outcome.get('name') == 'Over':
-                                                all_nfl_rows.append({
-                                                    "Matchup": matchup_str, "Market": m_key, "Sportsbook": b_title,
-                                                    "Player": outcome.get('description').strip(), "Line": float(outcome.get('point')),
-                                                    "Decimal Odds": outcome.get('price'), "Odds": decimal_to_american(outcome.get('price'))
-                                                })
-                            progress_bar.progress((idx + 1) / len(events_list))
-                        
-                        st.session_state['nfl_batch_slate'] = all_nfl_rows
-                        st.success(f"🟢 NFL batch scan complete! Found {len(all_nfl_rows)} prop lines across {scanned_count} games.")
-                    else:
-                        st.warning(f"⚠️ API Error: Status {ev_resp.status_code}")
-                except Exception as e:
-                    st.warning(f"⚠️ Connection Failed: {e}")
-        elif 'nfl_batch_slate' in st.session_state:
-            all_nfl_rows = st.session_state['nfl_batch_slate']
-
-        if all_nfl_rows:
-            nfl_master_df = pd.DataFrame(all_nfl_rows)
-            st.divider()
-            nfl_market_choice = st.selectbox(
-                "Select NFL Market to View",
-                ["player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions", "player_anytime_td"],
-                format_func=lambda x: x.replace("player_", "").replace("_", " ").title()
-            )
-            
-            market_nfl_df = nfl_master_df[nfl_master_df['Market'].str.contains(nfl_market_choice, na=False)].copy()
-            
-            st.metric("Available Props in Market View", len(market_nfl_df))
-            st.dataframe(market_nfl_df[['Matchup', 'Sportsbook', 'Player', 'Line', 'Odds']].head(50), use_container_width=True)
-        else:
-            st.info("💡 **Instructions:** Select target date above and click **Batch Scan NFL Markets** to pull live props.")
+    st.title("🏈 NFL Quant Terminal: Paused")
+    st.markdown("### Focus is currently locked on your production NHL terminal for tomorrow's slate.")
+    st.info("💡 **Instructions:** Switch back to **🏒 NHL (Active)** in the sidebar to use your live betting suite.")
