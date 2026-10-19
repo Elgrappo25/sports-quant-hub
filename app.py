@@ -368,7 +368,7 @@ with tab1:
                     res_col4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                 # ==========================================
-                # AUTOMATED SAME-BOOK PARLAY GENERATOR
+                # AUTOMATED SAME-BOOK PARLAY GENERATOR (STABLE ORIGINAL LAYOUT)
                 # ==========================================
                 st.divider()
                 st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -432,15 +432,7 @@ with tab1:
                         parlay_results_df = pd.DataFrame(generated_slips)
                         parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
                         st.success(f"🎉 Generated **{len(parlay_results_df)}** profitable automated parlays!")
-                        
-                        st.dataframe(
-                            parlay_results_df.head(10),
-                            column_config={
-                                "Legs": st.column_config.TextColumn("Legs (Parlay Breakdown)", width="large"),
-                                "Compound Edge %": st.column_config.NumberColumn("Compound Edge %", format="+%.1f%%")
-                            },
-                            use_container_width=True
-                        )
+                        st.dataframe(parlay_results_df.head(10), use_container_width=True)
                     else:
                         st.warning("⚠️ No parlays found matching your criteria.")
         else:
