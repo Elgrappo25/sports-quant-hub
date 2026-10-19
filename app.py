@@ -111,7 +111,15 @@ if "NHL" in active_sport:
         'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA',
         'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR',
         'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN',
-        'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'
+        'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH',
+        # NST Short Forms
+        'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ',
+        'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET',
+        'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'LAK': 'LAK', 'MIN': 'MIN',
+        'MTL': 'MTL', 'N.J': 'NJD', 'NJD': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI',
+        'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS',
+        'SJS': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TBL': 'TBL',
+        'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'
     }
 
     def compact_matchup(matchup_str):
@@ -226,10 +234,10 @@ if "NHL" in active_sport:
                 merged_model['Current_Stat'] = merged_model['Stat_curr'] / gp_curr
                 merged_model['Blended_Proj'] = (merged_model['Baseline_Stat'] * (1 - (season_weight / 100))) + (merged_model['Current_Stat'] * (season_weight / 100))
                 
-                nst_to_standard = {'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ', 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL', 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'}
                 def clean_team(t_str):
                     if pd.isna(t_str): return 'UNK'
-                    return nst_to_standard.get(str(t_str).split(',')[-1].strip(), str(t_str).split(',')[-1].strip())
+                    raw = str(t_str).split(',')[-1].strip()
+                    return team_to_abbrev.get(raw, raw)
                     
                 merged_model['Clean_Team'] = merged_model['Team_curr'].apply(clean_team)
                 merged_model['Matchup_Factor'] = merged_model['Clean_Team'].map(team_factors).fillna(1.0)
@@ -291,7 +299,7 @@ if "NHL" in active_sport:
                         r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
 
                     # ==========================================
-                    # AUTOMATED PARLAY GENERATOR (CLEANED & SORTED)
+                    # AUTOMATED PARLAY GENERATOR
                     # ==========================================
                     st.divider()
                     st.subheader("🤖 Automated Same-Book +EV Parlay Generator")
@@ -342,7 +350,7 @@ if "NHL" in active_sport:
                                     std_str = f"+{std_am}" if std_am > 0 else f"{std_am}"
                                     generated_slips.append({
                                         "Sportsbook": book_name,
-                                        "Compound Edge %": slip_e,  # Front & center!
+                                        "Compound Edge %": slip_e,
                                         "Standard Odds": std_str,
                                         f"Boosted Odds (+{global_boost}%)": b_str,
                                         "Model Prob": f"{round(comb_prob * 100, 1)}%",
@@ -351,7 +359,6 @@ if "NHL" in active_sport:
                         
                         if generated_slips:
                             parlay_results_df = pd.DataFrame(generated_slips)
-                            # Explicitly sort highest to lowest compound edge
                             parlay_results_df = parlay_results_df.sort_values(by="Compound Edge %", ascending=False).reset_index(drop=True)
                             st.session_state['generated_parlays_cache'] = parlay_results_df
                         else:
@@ -406,11 +413,6 @@ if "NHL" in active_sport:
                     else: prev_team_df = temp_df
                     
             if curr_player_df is not None and prev_player_df is not None:
-                nst_to_standard = {'ANA': 'ANA', 'BOS': 'BOS', 'BUF': 'BUF', 'CAR': 'CAR', 'CBJ': 'CBJ', 'CGY': 'CGY', 'CHI': 'CHI', 'COL': 'COL', 'DAL': 'DAL', 'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'L.A': 'LAK', 'MIN': 'MIN', 'MTL': 'MTL', 'N.J': 'NJD', 'NSH': 'NSH', 'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT', 'S.J': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'T.B': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'}
-                def clean_team(t_str):
-                    if pd.isna(t_str): return 'UNK'
-                    return nst_to_standard.get(str(t_str).split(',')[-1].strip(), str(t_str).split(',')[-1].strip())
-
                 active_teams = set()
                 team_matchup_factors = {}
                 team_opponents = {}
@@ -420,7 +422,7 @@ if "NHL" in active_sport:
                     sched_resp = requests.get(sched_url).json()
                     
                     if curr_team_df is not None and 'Team' in curr_team_df.columns:
-                        curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map({'Anaheim Ducks': 'ANA', 'Boston Bruins': 'BOS', 'Buffalo Sabres': 'BUF', 'Carolina Hurricanes': 'CAR', 'Columbus Blue Jackets': 'CBJ', 'Calgary Flames': 'CGY', 'Chicago Blackhawks': 'CHI', 'Colorado Avalanche': 'COL', 'Dallas Stars': 'DAL', 'Detroit Red Wings': 'DET', 'Edmonton Oilers': 'EDM', 'Florida Panthers': 'FLA', 'Los Angeles Kings': 'LAK', 'Minnesota Wild': 'MIN', 'Montreal Canadiens': 'MTL', 'New Jersey Devils': 'NJD', 'Nashville Predators': 'NSH', 'New York Islanders': 'NYI', 'New York Rangers': 'NYR', 'Ottawa Senators': 'OTT', 'Philadelphia Flyers': 'PHI', 'Pittsburgh Penguins': 'PIT', 'San Jose Sharks': 'SJS', 'Seattle Kraken': 'SEA', 'St Louis Blues': 'STL', 'Tampa Bay Lightning': 'TBL', 'Toronto Maple Leafs': 'TOR', 'Utah Mammoth': 'UTA', 'Utah Hockey Club': 'UTA', 'Utah': 'UTA', 'Vancouver Canucks': 'VAN', 'Vegas Golden Knights': 'VGK', 'Winnipeg Jets': 'WPG', 'Washington Capitals': 'WSH'})
+                        curr_team_df['Standard_Abbrev'] = curr_team_df['Team'].map(team_to_abbrev)
                         stat_col = 'SA' if batch_market == "Shots on Goal (SOG)" else ('HDCA' if batch_market == "Anytime Goal Scorer" else 'SCA')
                         if stat_col not in curr_team_df.columns: stat_col = 'CA'
                         curr_team_df[stat_col] = pd.to_numeric(curr_team_df[stat_col], errors='coerce').fillna(0)
@@ -449,6 +451,12 @@ if "NHL" in active_sport:
                 st.session_state['raw_player_dfs'] = (curr_player_df, prev_player_df, team_matchup_factors)
 
                 merged_df = pd.merge(curr_player_df, prev_player_df, on='Player', suffixes=('_curr', '_prev'), how='inner')
+                
+                def clean_team(t_str):
+                    if pd.isna(t_str): return 'UNK'
+                    raw = str(t_str).split(',')[-1].strip()
+                    return team_to_abbrev.get(raw, raw)
+
                 merged_df['Clean_Team'] = merged_df['Team_curr'].apply(clean_team)
                 
                 merged_df['Stat_curr'] = pd.to_numeric(merged_df[f'{target_col}_curr'], errors='coerce').fillna(0)
@@ -499,8 +507,8 @@ if "NHL" in active_sport:
                     return 'color: #CFD8DC;'
 
                 st.dataframe(
-                    final_board.style.map(lambda v: color_matrix_cells(v, 'Matchup_Factor'), subset=['Matchup_Factor'])
-                               .map(lambda v: color_matrix_cells(v, 'Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
+                    final_board.style.map(lambda v: color_matrix_cells(val=v, col_name='Matchup_Factor'), subset=['Matchup_Factor'])
+                               .map(lambda v: color_matrix_cells(val=v, col_name='Model_Over_Prob_%'), subset=['Model_Over_Prob_%']),
                     use_container_width=True,
                     height=500
                 )
