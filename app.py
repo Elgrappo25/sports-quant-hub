@@ -4,7 +4,6 @@ import requests
 import math
 from datetime import date
 import itertools
-import nfl_data_py as nfl
 
 st.set_page_config(page_title="Sports Quant Hub - Multi-Sport Terminal", page_icon="🏆", layout="wide")
 
@@ -363,16 +362,25 @@ elif "NFL" in active_sport:
     with tab_nfl2:
         st.subheader("Automated Weekly Player Stats Engine (nflverse)")
         st.write("Player statistics update automatically via open-source weekly releases every Wednesday morning.")
-        nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025], index=0)
+        nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025, 2024], index=0)
         
         load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
         if load_nfl_btn or 'nfl_master_df' not in st.session_state:
             try:
-                nfl_raw = nfl.import_weekly_data([nfl_season_input])
+                # Direct CSV endpoint from nflverse repository data branch
+                url = f"https://raw.githubusercontent.com/nflverse/nflverse-data/master/player_stats/stats_player_week_{nfl_season_input}.csv"
+                nfl_raw = pd.read_csv(url)
                 st.session_state['nfl_master_df'] = nfl_raw
                 st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
             except Exception as e:
-                st.warning(f"⚠️ Could not automatically fetch weekly data yet: {e}. Check back after season games initialize.")
+                try:
+                    # Fallback compressed format URL
+                    url_gz = f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/stats_player_week_{nfl_season_input}.csv.gz"
+                    nfl_raw = pd.read_csv(url_gz, compression='gzip')
+                    st.session_state['nfl_master_df'] = nfl_raw
+                    st.success(f"🟢 Successfully pulled {len(nfl_raw)} rows of weekly NFL player data for {nfl_season_input}!")
+                except Exception as e2:
+                    st.warning(f"⚠️ Could not fetch data for {nfl_season_input}: {e2}. Note: 2026 weekly data publishes as games occur.")
 
         if 'nfl_master_df' in st.session_state:
             st.metric("Total Player Week Records Loaded", len(st.session_state['nfl_master_df']))
