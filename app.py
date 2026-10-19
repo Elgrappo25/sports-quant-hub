@@ -365,7 +365,7 @@ elif "NFL" in active_sport:
         st.write("Player statistics update automatically via open-source weekly releases every Wednesday morning.")
         nfl_season_input = st.selectbox("Select NFL Season Year", [2026, 2025], index=0)
         
-        load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_control_width=True if 'use_control_width' in globals() else False)
+        load_nfl_btn = st.button("🔄 Fetch Latest Weekly NFL CSV Data", use_container_width=True)
         if load_nfl_btn or 'nfl_master_df' not in st.session_state:
             try:
                 nfl_raw = nfl.import_weekly_data([nfl_season_input])
