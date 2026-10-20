@@ -128,7 +128,6 @@ if "NHL" in active_sport:
         if len(st.session_state['bet_slip_queue']) > 0:
             queue_data = st.session_state['bet_slip_queue']
             
-            # Pure input fields to prevent input lag
             display_rows = []
             for item in queue_data:
                 display_rows.append({
@@ -205,7 +204,6 @@ if "NHL" in active_sport:
                 eval_df = pd.DataFrame(evaluated_legs)
                 st.write("### 📈 Live Edge Evaluation:")
                 
-                # Clean visual output of calculated edges
                 def format_edge(val):
                     return f"+{val}%" if val > 0 else f"{val}%"
                 
@@ -227,7 +225,10 @@ if "NHL" in active_sport:
                     std_am = int((comb_dec - 1) * 100) if comb_dec >= 2.0 else int(-100 / (comb_dec - 1))
                     b_dec = 1 + ((comb_dec - 1) * (1 + (global_boost / 100.0)))
                     b_am = int((b_dec - 1) * 100) if b_dec >= 2.0 else int(-100 / (b_dec - 1))
-                    slip_edge = round((comb_prob - (1.0 / comb_dec)) * 100, 1)
+                    
+                    # Uses boosted odds when profit boost is applied (> 0%)
+                    active_dec = b_dec if global_boost > 0 else comb_dec
+                    slip_edge = round((comb_prob - (1.0 / active_dec)) * 100, 1)
                     
                     r1, r2, r3, r4 = st.columns(4)
                     r1.metric("Checked Parlay Odds", f"+{std_am}" if std_am > 0 else f"{std_am}")
