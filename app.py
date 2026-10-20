@@ -118,7 +118,7 @@ if "NHL" in active_sport:
 
     with tab1:
         st.subheader("📝 Checked Players & Nexus Odds Comparator")
-        st.write("Type your Nexus Odds in the table. Checked rows automatically calculate individual edges and compound your parlay.")
+        st.write("Type your Nexus Odds in the table. Real-time edges and compound parlay odds calculate live below.")
 
         col_clr1, col_clr2 = st.columns([4, 1])
         if col_clr2.button("🗑️ Clear Bet Slip", use_container_width=True):
@@ -128,17 +128,9 @@ if "NHL" in active_sport:
         if len(st.session_state['bet_slip_queue']) > 0:
             queue_data = st.session_state['bet_slip_queue']
             
+            # Pure input fields to prevent input lag
             display_rows = []
             for item in queue_data:
-                odds_val = item.get('Nexus Odds (+/-)', None)
-                m_prob = item['Model_Over_Prob']
-                
-                edge_disp = "--"
-                if odds_val is not None and not pd.isna(odds_val) and int(odds_val) != 0:
-                    dec = american_to_decimal(int(odds_val))
-                    edge_num = round((m_prob - (1.0 / dec)) * 100, 1)
-                    edge_disp = f"+{edge_num}%" if edge_num > 0 else f"{edge_num}%"
-
                 display_rows.append({
                     "Include": item.get('Include', True),
                     "Sportsbook": item.get('Sportsbook', "FanDuel"),
@@ -146,9 +138,8 @@ if "NHL" in active_sport:
                     "Opponent": item['Opponent'],
                     "Market": item['Market'],
                     "Line": float(item['Line']),
-                    "Nexus Odds (+/-)": odds_val,
+                    "Nexus Odds (+/-)": item.get('Nexus Odds (+/-)', None),
                     "Model Prob (%)": item['Model_Over_Prob_%'],
-                    "Calculated Edge": edge_disp,
                     "Delete": False
                 })
             
@@ -157,7 +148,7 @@ if "NHL" in active_sport:
             edited_df = st.data_editor(
                 df_slip,
                 use_container_width=True,
-                height=350,
+                height=300,
                 key="unified_bet_slip_editor",
                 column_config={
                     "Include": st.column_config.CheckboxColumn("Include in Parlay", default=True),
@@ -168,11 +159,11 @@ if "NHL" in active_sport:
                     "Line": st.column_config.NumberColumn("Line", disabled=True, format="%.1f"),
                     "Nexus Odds (+/-)": st.column_config.NumberColumn("Nexus Odds (+/-)", help="Enter American odds e.g. -200 or 115", format="%d", step=1),
                     "Model Prob (%)": st.column_config.NumberColumn("Model Prob (%)", disabled=True, format="%.1f%%"),
-                    "Calculated Edge": st.column_config.TextColumn("Calculated Edge", disabled=True),
                     "Delete": st.column_config.CheckboxColumn("Delete", help="Check to remove this leg", default=False)
                 }
             )
             
+            # Process deletions
             to_delete_indices = [i for i, row in edited_df.iterrows() if row['Delete']]
             if to_delete_indices:
                 st.session_state['bet_slip_queue'] = [
@@ -180,54 +171,71 @@ if "NHL" in active_sport:
                 ]
                 st.rerun()
 
+            # Synchronize state immediately
             for i, row in edited_df.iterrows():
                 if i < len(st.session_state['bet_slip_queue']):
                     st.session_state['bet_slip_queue'][i]['Sportsbook'] = row['Sportsbook']
                     st.session_state['bet_slip_queue'][i]['Nexus Odds (+/-)'] = row['Nexus Odds (+/-)']
                     st.session_state['bet_slip_queue'][i]['Include'] = row['Include']
 
-            valid_legs = []
+            # Calculate live output table and parlay legs instantaneously from edited_df
+            evaluated_legs = []
             for i, row in edited_df.iterrows():
                 odds_val = row['Nexus Odds (+/-)']
-                if row['Include'] and odds_val is not None and not pd.isna(odds_val) and int(odds_val) != 0:
+                if odds_val is not None and not pd.isna(odds_val) and int(odds_val) != 0:
                     am_odds = int(odds_val)
                     dec_odds = american_to_decimal(am_odds)
                     true_prob = float(row['Model Prob (%)']) / 100.0
                     edge_num = round((true_prob - (1.0 / dec_odds)) * 100, 1)
-                    valid_legs.append({
+                    evaluated_legs.append({
+                        "Include": row['Include'],
                         "Sportsbook": row['Sportsbook'],
                         "Player": row['Player'],
+                        "Opponent": row['Opponent'],
                         "Market": row['Market'],
                         "Line": row['Line'],
                         "Odds": f"{am_odds:+d}" if am_odds > 0 else f"{am_odds}",
                         "Decimal Odds": dec_odds,
+                        "Model Prob": f"{round(true_prob * 100, 1)}%",
                         "True Prob": true_prob,
-                        "Edge": f"+{edge_num}%" if edge_num > 0 else f"{edge_num}%"
+                        "Edge %": edge_num
                     })
 
-            if valid_legs:
-                st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
+            if evaluated_legs:
+                eval_df = pd.DataFrame(evaluated_legs)
+                st.write("### 📈 Live Edge Evaluation:")
                 
-                comb_dec = 1.0
-                comb_prob = 1.0
-                for leg in valid_legs:
-                    comb_dec *= leg['Decimal Odds']
-                    comb_prob *= leg['True Prob']
+                # Clean visual output of calculated edges
+                def format_edge(val):
+                    return f"+{val}%" if val > 0 else f"{val}%"
                 
-                std_am = int((comb_dec - 1) * 100) if comb_dec >= 2.0 else int(-100 / (comb_dec - 1))
-                
-                b_dec = 1 + ((comb_dec - 1) * (1 + (global_boost / 100.0)))
-                b_am = int((b_dec - 1) * 100) if b_dec >= 2.0 else int(-100 / (b_dec - 1))
-                
-                slip_edge = round((comb_prob - (1.0 / comb_dec)) * 100, 1)
-                
-                r1, r2, r3, r4 = st.columns(4)
-                r1.metric("Checked Parlay Odds", f"+{std_am}" if std_am > 0 else f"{std_am}")
-                r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
-                r3.metric("Model Slip True Prob", f"{round(comb_prob * 100, 1)}%")
-                r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
+                disp_eval = eval_df[['Sportsbook', 'Player', 'Opponent', 'Market', 'Line', 'Odds', 'Model Prob', 'Edge %']].copy()
+                disp_eval['Edge %'] = disp_eval['Edge %'].apply(format_edge)
+                st.dataframe(disp_eval, use_container_width=True)
+
+                # Compound Parlay Calculations for active checked legs
+                parlay_legs = [leg for leg in evaluated_legs if leg['Include']]
+                if len(parlay_legs) > 0:
+                    st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
+                    
+                    comb_dec = 1.0
+                    comb_prob = 1.0
+                    for leg in parlay_legs:
+                        comb_dec *= leg['Decimal Odds']
+                        comb_prob *= leg['True Prob']
+                    
+                    std_am = int((comb_dec - 1) * 100) if comb_dec >= 2.0 else int(-100 / (comb_dec - 1))
+                    b_dec = 1 + ((comb_dec - 1) * (1 + (global_boost / 100.0)))
+                    b_am = int((b_dec - 1) * 100) if b_dec >= 2.0 else int(-100 / (b_dec - 1))
+                    slip_edge = round((comb_prob - (1.0 / comb_dec)) * 100, 1)
+                    
+                    r1, r2, r3, r4 = st.columns(4)
+                    r1.metric("Checked Parlay Odds", f"+{std_am}" if std_am > 0 else f"{std_am}")
+                    r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
+                    r3.metric("Model Slip True Prob", f"{round(comb_prob * 100, 1)}%")
+                    r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
             else:
-                st.info("✍️ **Enter Odds:** Type your lines under `Nexus Odds (+/-)` above. The compound parlay cards will calculate live.")
+                st.info("✍️ **Enter Odds:** Type your lines under `Nexus Odds (+/-)` above. Live individual edges and parlay metrics will calculate instantly.")
         else:
             st.info("💡 **Instructions:** Go to **Tab 2**, select your market and line, check your desired players, and click **'➕ Add Checked to Bet Slip'**.")
 
