@@ -120,13 +120,12 @@ if "NHL" in active_sport:
         'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WPG': 'WPG', 'WSH': 'WSH'
     }
 
-    # Initialize bet slip persistent accumulator in session state
     if 'bet_slip_queue' not in st.session_state:
         st.session_state['bet_slip_queue'] = []
 
     with tab1:
         st.subheader("📝 Checked Players & Nexus Odds Comparator")
-        st.write("Players accumulated from Tab 2 appear here with their exact target market and line. Type your Nexus Odds below.")
+        st.write("Players accumulated from Tab 2 appear here. Type your Nexus Odds to calculate individual edges and build compound parlays.")
 
         col_clr1, col_clr2 = st.columns([4, 1])
         if col_clr2.button("🗑️ Clear Bet Slip", use_container_width=True):
@@ -139,6 +138,7 @@ if "NHL" in active_sport:
             input_rows = []
             for idx, r in queue_df.iterrows():
                 input_rows.append({
+                    "Delete": False,
                     "Player": r['Player'],
                     "Team": r['Clean_Team'],
                     "Opponent": r['Opponent'],
@@ -156,8 +156,14 @@ if "NHL" in active_sport:
                 input_df,
                 use_container_width=True,
                 height=350,
+                num_rows="dynamic",
                 key="nexus_odds_comparator_editor",
                 column_config={
+                    "Delete": st.column_config.CheckboxColumn(
+                        "Delete",
+                        help="Check to delete this individual row",
+                        default=False
+                    ),
                     "Sportsbook": st.column_config.SelectboxColumn(
                         "Sportsbook",
                         help="Select sportsbook for this row",
@@ -174,6 +180,16 @@ if "NHL" in active_sport:
                 }
             )
             
+            # Individual row deletion check
+            rows_to_delete = edited_nexus_df[edited_nexus_df['Delete'] == True]
+            if len(rows_to_delete) > 0:
+                delete_keys = set(zip(rows_to_delete['Player'], rows_to_delete['Market'], rows_to_delete['Line']))
+                st.session_state['bet_slip_queue'] = [
+                    item for item in st.session_state['bet_slip_queue']
+                    if (item['Player'], item['Market'], float(item['Line'])) not in delete_keys
+                ]
+                st.rerun()
+
             processed_nexus_rows = []
             for idx, r in edited_nexus_df.iterrows():
                 try:
@@ -243,8 +259,10 @@ if "NHL" in active_sport:
                     r2.metric(f"Boosted (+{global_boost}%)", f"+{b_am}" if b_am > 0 else f"{b_am}")
                     r3.metric("Model Slip True Prob", f"{round(combined_true_prob * 100, 1)}%")
                     r4.metric("Compound Slip Edge", f"+{slip_edge}%" if slip_edge > 0 else f"{slip_edge}%")
+            else:
+                st.info("✍️ **Enter Odds:** Type your lines under `Nexus Odds (+/-)` above to evaluate individual edges and compound your parlay.")
         else:
-            st.info("💡 **Instructions:** Go to **Tab 2**, pick your market and line, check your desired players, and click **'➕ Add Checked Players to Bet Slip'**. You can do this multiple times across different lines!")
+            st.info("💡 **Instructions:** Go to **Tab 2**, pick your market and line, check your desired players, and click **'➕ Add Checked to Bet Slip'**.")
 
     with tab2:
         st.subheader("Single Dropzone: Multi-File NST Processor & Master Slate Matrix")
@@ -303,7 +321,7 @@ if "NHL" in active_sport:
                         for _, row in curr_team_df.iterrows():
                             t_abbrev = row['Standard_Abbrev']
                             val = row.get('Stat_Per_Game', mean_val)
-                            factor = val / mean_val if val > 0 else 1.0
+                            factor = val / mean_val if mean_val > 0 else 1.0
                             if pd.notnull(t_abbrev): team_matchup_factors[t_abbrev] = max(0.80, min(1.20, factor))
 
                     for week_day in sched_resp.get("gameWeek", []):
@@ -414,9 +432,6 @@ if "NHL" in active_sport:
                     key=f"matrix_editor_{batch_market}_{target_line_choice}"
                 )
 
-                # ==========================================
-                # ACCUMULATION BUTTON (PRESERVES EXACT MARKET & LINE)
-                # ==========================================
                 add_to_slip_btn = st.button("➕ Add Checked Players to Bet Slip", use_container_width=True)
                 
                 if add_to_slip_btn:
@@ -444,7 +459,7 @@ if "NHL" in active_sport:
                                         'Model_Over_Prob_%': round(p_prob * 100, 1)
                                     })
                                     added_count += 1
-                        st.success(f"🎉 Added {added_count} player(s) at {batch_market} > {target_line_choice} to your bet slip! Current slip has {len(st.session_state['bet_slip_queue'])} total leg(s).")
+                        st.rerun()
                     else:
                         st.warning("⚠️ Please check at least one player in the table first.")
             else:
