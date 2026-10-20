@@ -162,7 +162,6 @@ if "NHL" in active_sport:
                 }
             )
             
-            # Process deletions
             to_delete_indices = [i for i, row in edited_df.iterrows() if row['Delete']]
             if to_delete_indices:
                 st.session_state['bet_slip_queue'] = [
@@ -170,14 +169,12 @@ if "NHL" in active_sport:
                 ]
                 st.rerun()
 
-            # Synchronize state immediately
             for i, row in edited_df.iterrows():
                 if i < len(st.session_state['bet_slip_queue']):
                     st.session_state['bet_slip_queue'][i]['Sportsbook'] = row['Sportsbook']
                     st.session_state['bet_slip_queue'][i]['Nexus Odds (+/-)'] = row['Nexus Odds (+/-)']
                     st.session_state['bet_slip_queue'][i]['Include'] = row['Include']
 
-            # Calculate live output table and parlay legs instantaneously from edited_df
             evaluated_legs = []
             for i, row in edited_df.iterrows():
                 odds_val = row['Nexus Odds (+/-)']
@@ -211,7 +208,6 @@ if "NHL" in active_sport:
                 disp_eval['Edge %'] = disp_eval['Edge %'].apply(format_edge)
                 st.dataframe(disp_eval, use_container_width=True)
 
-                # Compound Parlay Calculations for active checked legs
                 parlay_legs = [leg for leg in evaluated_legs if leg['Include']]
                 if len(parlay_legs) > 0:
                     st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
@@ -226,7 +222,6 @@ if "NHL" in active_sport:
                     b_dec = 1 + ((comb_dec - 1) * (1 + (global_boost / 100.0)))
                     b_am = int((b_dec - 1) * 100) if b_dec >= 2.0 else int(-100 / (b_dec - 1))
                     
-                    # Uses boosted odds when profit boost is applied (> 0%)
                     active_dec = b_dec if global_boost > 0 else comb_dec
                     slip_edge = round((comb_prob - (1.0 / active_dec)) * 100, 1)
                     
@@ -377,6 +372,9 @@ if "NHL" in active_sport:
                 merged_df['Model_Over_Prob'] = merged_df['Matchup_Proj'].apply(lambda x: poisson_over_prob(x, target_line_choice))
                 merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
                 merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
+
+                # Weighted Quant Matchup-Leverage Score
+                merged_df['Weighted_Matchup_Score'] = merged_df['Matchup_Proj'] * (merged_df['Matchup_Factor'] ** 1.5)
                 
                 st.success(f"📅 **Active Matrix Filter:** Showing **{len(merged_df)} players** across selected games on {target_date}.")
                 
@@ -408,8 +406,11 @@ if "NHL" in active_sport:
                     key=f"matrix_editor_{batch_market}_{target_line_choice}"
                 )
 
-                add_to_slip_btn = st.button("➕ Add Checked Players to Bet Slip", use_container_width=True)
-                
+                # Dual Action Buttons: Manual Checked vs Quant Auto-Load Top 5
+                btn_col1, btn_col2 = st.columns(2)
+                add_to_slip_btn = btn_col1.button("➕ Add Checked Players to Bet Slip", use_container_width=True)
+                autoload_top5_btn = btn_col2.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True)
+
                 if add_to_slip_btn:
                     checked_matrix_rows = edited_matrix[edited_matrix['Select'] == True]
                     if len(checked_matrix_rows) > 0:
@@ -439,6 +440,32 @@ if "NHL" in active_sport:
                         st.rerun()
                     else:
                         st.warning("⚠️ Please check at least one player in the table first.")
+
+                if autoload_top5_btn:
+                    # Select top 5 players weighted by matchup leverage and model projection
+                    top5_candidates = merged_df.sort_values(by='Weighted_Matchup_Score', ascending=False).head(5)
+                    existing_keys = {(r['Player'], r['Market'], float(r['Line'])) for r in st.session_state['bet_slip_queue']}
+                    
+                    for _, row in top5_candidates.iterrows():
+                        p_name = row['Player']
+                        item_key = (p_name, batch_market, float(target_line_choice))
+                        if item_key not in existing_keys:
+                            p_proj = row['Matchup_Proj']
+                            p_prob = poisson_over_prob(p_proj, target_line_choice)
+                            st.session_state['bet_slip_queue'].append({
+                                'Player': p_name,
+                                'Clean_Team': row['Clean_Team'],
+                                'Opponent': row['Opponent'],
+                                'Market': batch_market,
+                                'Line': float(target_line_choice),
+                                'Matchup_Proj': p_proj,
+                                'Model_Over_Prob': p_prob,
+                                'Model_Over_Prob_%': round(p_prob * 100, 1),
+                                'Sportsbook': 'FanDuel',
+                                'Nexus Odds (+/-)': None,
+                                'Include': True
+                            })
+                    st.rerun()
             else:
                 st.warning("Please upload both Player Season Total CSV files.")
         else:
