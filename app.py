@@ -277,7 +277,7 @@ if "NHL" in active_sport:
                 team_matchup_factors = {}
                 team_opponents_raw = {}
                 team_opponents_display = {}
-                available_matchups = []
+                raw_game_pairs = []
                 
                 try:
                     sched_resp = requests.get(f"https://api-web.nhle.com/v1/schedule/{target_date.strftime('%Y-%m-%d')}").json()
@@ -303,14 +303,30 @@ if "NHL" in active_sport:
                                 if away: active_teams.add(away)
                                 if home: active_teams.add(home)
                                 if away and home:
-                                    matchup_label = f"{away} @ {home}"
-                                    available_matchups.append(matchup_label)
+                                    raw_game_pairs.append((away, home))
                                     team_opponents_raw[away] = home
                                     team_opponents_raw[home] = away
                                     team_opponents_display[away] = f"@{home}"
                                     team_opponents_display[home] = f"vs {away}"
                 except Exception as e:
                     pass
+
+                # Build Sorted Matchup Labels with Combined Factors Embedded
+                scored_matchups = []
+                for away, home in raw_game_pairs:
+                    # Away team faces Home defense (team_matchup_factors[home])
+                    # Home team faces Away defense (team_matchup_factors[away])
+                    factor_away_faces = team_matchup_factors.get(home, 1.0)
+                    factor_home_faces = team_matchup_factors.get(away, 1.0)
+                    comb_factor = round(factor_away_faces + factor_home_faces, 2)
+                    
+                    flame_icon = " 🔥" if comb_factor >= 2.15 else ""
+                    label = f"{away} @ {home} [{comb_factor}{flame_icon}]"
+                    scored_matchups.append((comb_factor, label, away, home))
+                
+                # Sort descending: Highest combined chaos games at the top
+                scored_matchups.sort(key=lambda x: x[0], reverse=True)
+                available_matchups = [m[1] for m in scored_matchups]
 
                 target_col = 'Shots' if batch_market == "Shots on Goal (SOG)" else ('Total Points' if batch_market == "Points (G+A)" else ('Goals' if batch_market == "Anytime Goal Scorer" else 'Total Assists'))
                 prev_col = target_col
@@ -355,15 +371,16 @@ if "NHL" in active_sport:
                 st.divider()
                 if available_matchups:
                     selected_games_filter = st.multiselect(
-                        "🎯 Filter Specific Game Matchups (Leave empty or select all for full slate)",
+                        "🎯 Filter Specific Game Matchups (Sorted by Combined Factor)",
                         available_matchups,
                         default=available_matchups,
-                        key="game_matchup_multiselect"
+                        key=f"game_matchup_multiselect_{batch_market}"
                     )
                     if selected_games_filter:
                         active_filtered_teams = set()
-                        for m in selected_games_filter:
-                            parts = m.split(" @ ")
+                        for m_lbl in selected_games_filter:
+                            clean_m = m_lbl.split(" [")[0].strip()
+                            parts = clean_m.split(" @ ")
                             if len(parts) == 2:
                                 active_filtered_teams.add(parts[0].strip())
                                 active_filtered_teams.add(parts[1].strip())
@@ -373,7 +390,6 @@ if "NHL" in active_sport:
                 merged_df['Fair_American_Odds'] = merged_df['Model_Over_Prob'].apply(lambda p: f"{prob_to_american(p):+d}" if isinstance(prob_to_american(p), int) else prob_to_american(p))
                 merged_df['Model_Over_Prob_%'] = (merged_df['Model_Over_Prob'] * 100).round(1)
 
-                # Weighted Quant Matchup-Leverage Score
                 merged_df['Weighted_Matchup_Score'] = merged_df['Matchup_Proj'] * (merged_df['Matchup_Factor'] ** 1.5)
                 
                 st.success(f"📅 **Active Matrix Filter:** Showing **{len(merged_df)} players** across selected games on {target_date}.")
@@ -406,7 +422,6 @@ if "NHL" in active_sport:
                     key=f"matrix_editor_{batch_market}_{target_line_choice}"
                 )
 
-                # Dual Action Buttons: Manual Checked vs Quant Auto-Load Top 5
                 btn_col1, btn_col2 = st.columns(2)
                 add_to_slip_btn = btn_col1.button("➕ Add Checked Players to Bet Slip", use_container_width=True)
                 autoload_top5_btn = btn_col2.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True)
@@ -442,7 +457,6 @@ if "NHL" in active_sport:
                         st.warning("⚠️ Please check at least one player in the table first.")
 
                 if autoload_top5_btn:
-                    # Select top 5 players weighted by matchup leverage and model projection
                     top5_candidates = merged_df.sort_values(by='Weighted_Matchup_Score', ascending=False).head(5)
                     existing_keys = {(r['Player'], r['Market'], float(r['Line'])) for r in st.session_state['bet_slip_queue']}
                     
