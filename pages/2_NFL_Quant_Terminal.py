@@ -287,7 +287,19 @@ with tab2:
 
                 with col_auto:
                     if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                        top5 = edited_matrix.head(5)
+                        temp_df = edited_matrix.copy()
+
+                        # Edge score: Model Probability amplified by defensive Matchup Factor strength
+                        temp_df["Weighted_Score"] = temp_df["Model_Over_Prob_%"] * (temp_df["Matchup_Factor"] ** 2.5)
+
+                        # Sweet spot filter: Target high-edge, optimal parlay probability band (60% to 88%)
+                        sweet_spot_df = temp_df[(temp_df["Model_Over_Prob_%"] >= 60.0) & (temp_df["Model_Over_Prob_%"] <= 88.0)]
+
+                        # Fall back to full table if 1 or 2 isolated games have fewer than 5 players in the sweet spot
+                        candidate_pool = sweet_spot_df if len(sweet_spot_df) >= 5 else temp_df
+
+                        top5 = candidate_pool.sort_values(by="Weighted_Score", ascending=False).head(5)
+
                         for _, r in top5.iterrows():
                             st.session_state.nfl_bet_slip.append({
                                 "Include in Parlay": True,
@@ -300,7 +312,7 @@ with tab2:
                                 "Model Prob (%)": f"{r['Model_Over_Prob_%']}%",
                                 "Delete": False
                             })
-                        st.success("Auto-loaded Top 5 legs to Tab 1!")
+                        st.success(f"Auto-loaded Top {len(top5)} matchup-weighted sweet-spot legs to Tab 1!")
                         st.rerun()
             else:
                 st.warning("No qualifying players found for current filters.")
