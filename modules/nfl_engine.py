@@ -100,6 +100,9 @@ def process_nfl_player_matrix(df, baselines, selected_matchups, market, threshol
     l_rush = baselines['league_rush_avg']
     l_td = baselines['league_td_avg']
     
+    # Matchup regression shrinkage weight (50% toward 1.00 baseline to prevent small-sample explosion)
+    SHRINKAGE_WEIGHT = 0.50
+    
     if market == "Passing Yards":
         qb_logs = df[df['pass_attempt'] == 1].groupby(['passer_player_name', 'posteam', 'game_id'])['passing_yards'].sum().reset_index()
         gp_series = qb_logs.groupby('passer_player_name')['game_id'].nunique()
@@ -113,7 +116,8 @@ def process_nfl_player_matrix(df, baselines, selected_matchups, market, threshol
                 
             opp = team_opp_map[team].replace("vs ", "").replace("@", "")
             opp_allowed = baselines['def_pass'].get(opp, l_pass)
-            matchup_factor = round(opp_allowed / l_pass, 4)
+            raw_factor = opp_allowed / l_pass
+            matchup_factor = round(1.0 + SHRINKAGE_WEIGHT * (raw_factor - 1.0), 4)
             
             mean_yds = player_df['passing_yards'].mean()
             std_yds = player_df['passing_yards'].std()
@@ -152,7 +156,8 @@ def process_nfl_player_matrix(df, baselines, selected_matchups, market, threshol
                 
             opp = team_opp_map[team].replace("vs ", "").replace("@", "")
             opp_allowed = baselines['def_rush'].get(opp, l_rush)
-            matchup_factor = round(opp_allowed / l_rush, 4)
+            raw_factor = opp_allowed / l_rush
+            matchup_factor = round(1.0 + SHRINKAGE_WEIGHT * (raw_factor - 1.0), 4)
             
             mean_yds = player_df['rushing_yards'].mean()
             std_yds = player_df['rushing_yards'].std()
@@ -191,7 +196,8 @@ def process_nfl_player_matrix(df, baselines, selected_matchups, market, threshol
                 
             opp = team_opp_map[team].replace("vs ", "").replace("@", "")
             opp_allowed = baselines['def_pass'].get(opp, l_pass)
-            matchup_factor = round(opp_allowed / l_pass, 4)
+            raw_factor = opp_allowed / l_pass
+            matchup_factor = round(1.0 + SHRINKAGE_WEIGHT * (raw_factor - 1.0), 4)
             
             mean_yds = player_df['receiving_yards'].mean()
             std_yds = player_df['receiving_yards'].std()
@@ -230,7 +236,8 @@ def process_nfl_player_matrix(df, baselines, selected_matchups, market, threshol
                 
             opp = team_opp_map[team].replace("vs ", "").replace("@", "")
             opp_allowed = baselines['def_pass'].get(opp, l_pass)
-            matchup_factor = round(opp_allowed / l_pass, 4)
+            raw_factor = opp_allowed / l_pass
+            matchup_factor = round(1.0 + SHRINKAGE_WEIGHT * (raw_factor - 1.0), 4)
             
             mean_rec = player_df['complete_pass'].mean()
             lambda_val = mean_rec * matchup_factor
@@ -269,7 +276,8 @@ def process_nfl_player_matrix(df, baselines, selected_matchups, market, threshol
                 
             opp = team_opp_map[team].replace("vs ", "").replace("@", "")
             opp_td_allowed = baselines['def_td'].get(opp, l_td)
-            matchup_factor = round(opp_td_allowed / l_td, 4)
+            raw_factor = opp_td_allowed / l_td
+            matchup_factor = round(1.0 + SHRINKAGE_WEIGHT * (raw_factor - 1.0), 4)
             
             base_lambda = total_tds / t_gp
             lambda_val = base_lambda * matchup_factor
