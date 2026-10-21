@@ -55,13 +55,22 @@ def calculate_matchup_factors_for_slate(schedule_games, baselines):
     factors = []
     l_pass = baselines['league_pass_avg']
     l_rush = baselines['league_rush_avg']
+    league_med = l_pass + l_rush
     
     for g in schedule_games:
         home, away = g['home'], g['away']
-        home_tot = baselines['off_pass'].get(home, l_pass) + baselines['off_rush'].get(home, l_rush)
-        away_tot = baselines['off_pass'].get(away, l_pass) + baselines['off_rush'].get(away, l_rush)
-        league_median = l_pass + l_rush
-        combined_factor = round((home_tot + away_tot) / (2 * league_median), 2)
+        
+        home_off = baselines['off_pass'].get(home, l_pass) + baselines['off_rush'].get(home, l_rush)
+        away_off = baselines['off_pass'].get(away, l_pass) + baselines['off_rush'].get(away, l_rush)
+        
+        home_def = baselines['def_pass'].get(home, l_pass) + baselines['def_rush'].get(home, l_rush)
+        away_def = baselines['def_pass'].get(away, l_pass) + baselines['def_rush'].get(away, l_rush)
+        
+        # Two-way matchup expectations normalized to 1.0 baseline each (2.00 league average total)
+        home_matchup = (home_off * away_def) / (league_med ** 2)
+        away_matchup = (away_off * home_def) / (league_med ** 2)
+        
+        combined_factor = round(home_matchup + away_matchup, 2)
         
         factors.append({
             'matchup': g['matchup'],
