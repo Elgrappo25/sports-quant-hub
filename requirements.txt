@@ -3,3 +3,4 @@ pandas
 requests
 google-genai
 pillow
+scipy
