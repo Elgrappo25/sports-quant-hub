@@ -42,20 +42,23 @@ def decimal_to_american(dec):
         val = int(round(-100 / (dec - 1.0)))
         return f"{val}"
 
-# Initialize session state for bet slip
+# Initialize session state for bet slip and persistent data
 if "nfl_bet_slip" not in st.session_state:
     st.session_state.nfl_bet_slip = []
+
+if "nfl_df" not in st.session_state:
+    st.session_state.nfl_df = None
 
 # Top Header
 st.title("🏈 NFL Quant Terminal: Production Suite")
 st.subheader("Multi-Market Accumulator, Schedule Pace Matchups, and Compound Parlay Generator")
 
-# Sidebar settings
+# Sidebar settings (keyed so they persist across page switches)
 with st.sidebar:
     st.header("⚙️ NFL Model Settings")
     st.caption("Active Slate: 2026 Week 7")
-    min_gp = st.slider("Minimum Player Games Played (GP)", min_value=1, max_value=6, value=3)
-    profit_boost_pct = st.slider("Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
+    min_gp = st.slider("Minimum Player Games Played (GP)", min_value=1, max_value=6, value=3, key="nfl_min_gp")
+    profit_boost_pct = st.slider("Profit Boost (%)", min_value=0, max_value=100, value=30, step=5, key="nfl_profit_boost")
     st.divider()
     st.info("💡 Tip: Multi-select matchups in Tab 2 to isolate high-pace shootouts.")
 
@@ -192,15 +195,18 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("Single Dropzone: NFL Play-by-Play Processor")
-    uploaded_file = st.file_uploader("Drop your pbp-2026.csv file here", type=["csv"])
+    uploaded_file = st.file_uploader("Drop your pbp-2026.csv file here", type=["csv"], key="nfl_pbp_uploader")
+
+    @st.cache_data
+    def load_pbp_data(file):
+        return pd.read_csv(file, low_memory=False)
 
     if uploaded_file is not None:
-        try:
-            @st.cache_data
-            def load_pbp_data(file):
-                return pd.read_csv(file, low_memory=False)
+        st.session_state.nfl_df = load_pbp_data(uploaded_file)
 
-            df = load_pbp_data(uploaded_file)
+    if st.session_state.nfl_df is not None:
+        try:
+            df = st.session_state.nfl_df
             baselines = compute_nfl_team_baselines(df)
             
             col_mkt, col_line = st.columns(2)
