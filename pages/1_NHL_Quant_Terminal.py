@@ -10,7 +10,34 @@ st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("Dynamic Weighting, Multi-Market Prop Accumulators, and Compound Slip Evaluator")
 
 # -------------------------------------------------------------
-# SIDEBAR CONFIGURATION
+# PERSISTENT SESSION STATE INITIALIZATION
+# -------------------------------------------------------------
+if "nhl_bet_slip" not in st.session_state:
+    st.session_state["nhl_bet_slip"] = []
+
+if "nhl_sample_weight" not in st.session_state:
+    st.session_state["nhl_sample_weight"] = 40  # Defaults securely to Phase 2 (40%)
+
+if "nhl_min_gp" not in st.session_state:
+    st.session_state["nhl_min_gp"] = 3
+
+if "nhl_profit_boost" not in st.session_state:
+    st.session_state["nhl_profit_boost"] = 30
+
+if "nhl_raw_p_base" not in st.session_state:
+    st.session_state["nhl_raw_p_base"] = None
+
+if "nhl_raw_p_curr" not in st.session_state:
+    st.session_state["nhl_raw_p_curr"] = None
+
+if "nhl_raw_t_base" not in st.session_state:
+    st.session_state["nhl_raw_t_base"] = None
+
+if "nhl_raw_t_curr" not in st.session_state:
+    st.session_state["nhl_raw_t_curr"] = None
+
+# -------------------------------------------------------------
+# SIDEBAR CONFIGURATION (PERSISTENT VIA KEYS)
 # -------------------------------------------------------------
 st.sidebar.header("🏒 NHL Model Settings")
 
@@ -18,8 +45,8 @@ phase_weight = st.sidebar.slider(
     "Current Season Sample Weight (%)", 
     min_value=0, 
     max_value=100, 
-    value=20, 
     step=5,
+    key="nhl_sample_weight",
     help="Phase 1 (1-5 GP): 20%, Phase 2 (6-12 GP): 40%, Phase 3 (13-20 GP): 70%, Phase 4 (20+ GP): 100%"
 ) / 100.0
 
@@ -27,21 +54,23 @@ min_gp = st.sidebar.slider(
     "Minimum Current Season GP Filter",
     min_value=1,
     max_value=15,
-    value=3,
-    step=1
+    step=1,
+    key="nhl_min_gp"
 )
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 Market-Tailored Edge Filters")
-profit_boost = st.sidebar.number_input("Active Sportsbook Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
-
-# Session state initialization
-if "nhl_bet_slip" not in st.session_state:
-    st.session_state["nhl_bet_slip"] = []
+profit_boost = st.sidebar.number_input(
+    "Active Sportsbook Profit Boost (%)", 
+    min_value=0, 
+    max_value=100, 
+    step=5,
+    key="nhl_profit_boost"
+)
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
-# Comprehensive Team Mapping
+# Comprehensive Universal Team Mapping
 NHL_TEAM_DICT = {
     "ANA": ["ANA", "ANAHEIM", "DUCKS", "ANAHEIM DUCKS"],
     "BOS": ["BOS", "BOSTON", "BRUINS", "BOSTON BRUINS"],
@@ -98,22 +127,53 @@ with tab2:
     uploaded_files = st.file_uploader(
         "Drop all 4 Natural Stat Trick CSV files here", 
         type=["csv"], 
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="nhl_uploader"
     )
 
-    if uploaded_files:
-        st.session_state["nhl_uploaded_files"] = uploaded_files
+    def read_clean(f):
+        f.seek(0)
+        df = pd.read_csv(f)
+        df.columns = df.columns.str.strip()
+        return df
 
-    active_files = st.session_state.get("nhl_uploaded_files", None)
+    # Ingest newly dropped files into persistent session state
+    if uploaded_files and len(uploaded_files) >= 2:
+        player_files = []
+        team_files = []
+        for f in uploaded_files:
+            name_l = f.name.lower()
+            if "game" in name_l or "team" in name_l:
+                team_files.append(f)
+            else:
+                player_files.append(f)
+
+        # Cache player dataframes
+        if player_files:
+            p_dfs = [read_clean(f) for f in player_files]
+            for p_df in p_dfs:
+                if "shots/60" in [c.lower() for c in p_df.columns]:
+                    st.session_state["nhl_raw_p_base"] = p_df
+                else:
+                    st.session_state["nhl_raw_p_curr"] = p_df
+
+        # Cache team dataframes
+        if team_files:
+            t_dfs = [read_clean(f) for f in team_files]
+            for t_df in t_dfs:
+                if "sa/60" in [c.lower() for c in t_df.columns]:
+                    st.session_state["nhl_raw_t_base"] = t_df
+                else:
+                    st.session_state["nhl_raw_t_curr"] = t_df
 
     col_market, col_line = st.columns([1, 1])
     with col_market:
         selected_market = st.selectbox(
             "Select Target Prop Market",
-            ["Shots on Goal (SOG)", "Player Points", "Anytime Goal Scorer", "Player Assists"]
+            ["Shots on Goal (SOG)", "Player Points", "Anytime Goal Scorer", "Player Assists"],
+            key="nhl_market_selector"
         )
 
-    # Threshold options mapped per market
     market_threshold_map = {
         "Shots on Goal (SOG)": [1.5, 2.5, 3.5, 4.5],
         "Player Points": [0.5, 1.5, 2.5],
@@ -132,10 +192,11 @@ with tab2:
         selected_line = st.selectbox(
             "Select Target Threshold Line", 
             threshold_options, 
-            index=default_indices.get(selected_market, 0)
+            index=default_indices.get(selected_market, 0),
+            key="nhl_line_selector"
         )
 
-    slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"))
+    slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="nhl_slate_date")
 
     # 1. LIVE NHL SCHEDULE FETCH
     date_str = slate_date.strftime("%Y-%m-%d")
@@ -162,42 +223,18 @@ with tab2:
     except Exception:
         pass
 
-    if active_files and len(active_files) >= 2:
+    # Render matrix if session state contains cached tables
+    if st.session_state["nhl_raw_p_curr"] is not None and st.session_state["nhl_raw_p_base"] is not None:
         try:
-            player_files = []
-            team_files = []
-            for f in active_files:
-                name_l = f.name.lower()
-                if "game" in name_l or "team" in name_l:
-                    team_files.append(f)
-                else:
-                    player_files.append(f)
-
-            def read_clean(f):
-                f.seek(0)
-                df = pd.read_csv(f)
-                df.columns = df.columns.str.strip()
-                return df
+            df_t_base = st.session_state["nhl_raw_t_base"]
+            df_t_curr = st.session_state["nhl_raw_t_curr"]
 
             # ---------------------------------------------------------
             # 2. DEFENSIVE MATCHUP WEIGHTING (PRIOR BASELINE + CURRENT)
             # ---------------------------------------------------------
             team_def_factors = {}
-            if team_files:
+            if df_t_base is not None and df_t_curr is not None:
                 try:
-                    t_dfs = [read_clean(f) for f in team_files]
-                    df_t_base = None
-                    df_t_curr = None
-                    for t_df in t_dfs:
-                        if "sa/60" in [c.lower() for c in t_df.columns]:
-                            df_t_base = t_df
-                        else:
-                            df_t_curr = t_df
-
-                    if df_t_base is None: df_t_base = t_dfs[0]
-                    if df_t_curr is None: df_t_curr = t_dfs[-1]
-
-                    # Match metric to market: GA for points/goals/assists, SA for shots
                     base_metric_col = "ga/60" if selected_market != "Shots on Goal (SOG)" else "sa/60"
                     curr_metric_col = "GA" if selected_market != "Shots on Goal (SOG)" else "SA"
 
@@ -258,36 +295,22 @@ with tab2:
             selected_matchups = st.multiselect(
                 "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
                 options=sorted_labels,
-                default=sorted_labels
+                default=sorted_labels,
+                key=f"nhl_matchups_{selected_market}"
             )
 
             # ---------------------------------------------------------
-            # 4. SKATER STATS: MARKET-SPECIFIC EXTRACTION
+            # 4. SKATER STATS: MARKET EXTRACTION & BLENDING
             # ---------------------------------------------------------
-            p_dfs = [read_clean(f) for f in player_files]
-
-            df_p_base = None
-            df_p_curr = None
-            for p_df in p_dfs:
-                if "shots/60" in [c.lower() for c in p_df.columns]:
-                    df_p_base = p_df
-                else:
-                    df_p_curr = p_df
-
-            if df_p_base is None: df_p_base = p_dfs[0]
-            if df_p_curr is None: df_p_curr = p_dfs[-1]
+            df_p_base = st.session_state["nhl_raw_p_base"].copy()
+            df_p_curr = st.session_state["nhl_raw_p_curr"].copy()
 
             p_base_col = next((c for c in df_p_base.columns if c.strip().lower() in ["player", "name"]), None)
             p_curr_col = next((c for c in df_p_curr.columns if c.strip().lower() in ["player", "name"]), None)
 
-            if not p_base_col or not p_curr_col:
-                st.error("Could not find 'Player' column in CSV files.")
-                st.stop()
-
             df_p_base = df_p_base.rename(columns={p_base_col: "Player"})
             df_p_curr = df_p_curr.rename(columns={p_curr_col: "Player"})
 
-            # Select correct columns based on active market
             if selected_market == "Shots on Goal (SOG)":
                 base_rate_name = "Shots/60"
                 curr_count_name = "Shots"
@@ -297,11 +320,10 @@ with tab2:
             elif selected_market == "Anytime Goal Scorer":
                 base_rate_name = "Goals/60"
                 curr_count_name = "Goals"
-            else:  # Player Assists
+            else:
                 base_rate_name = "Total Assists/60"
                 curr_count_name = "Total Assists"
 
-            # Baseline per-game rate: (Rate/60) * (TOI/GP / 60)
             df_p_base["GP_Base"] = pd.to_numeric(df_p_base.get("GP", 82), errors="coerce").fillna(82)
             if base_rate_name in df_p_base.columns and "TOI/GP" in df_p_base.columns:
                 r60 = pd.to_numeric(df_p_base[base_rate_name], errors="coerce").fillna(0)
@@ -311,16 +333,13 @@ with tab2:
                 raw_c = pd.to_numeric(df_p_base.get(curr_count_name, 0), errors="coerce").fillna(0)
                 df_p_base["Baseline_Stat"] = (raw_c / df_p_base["GP_Base"].replace(0, 1)).round(4)
 
-            # Current season per-game rate: Count / GP
             df_p_curr["GP_Curr"] = pd.to_numeric(df_p_curr.get("GP", 1), errors="coerce").fillna(1)
             raw_curr = pd.to_numeric(df_p_curr.get(curr_count_name, 0), errors="coerce").fillna(0)
             df_p_curr["Current_Stat"] = (raw_curr / df_p_curr["GP_Curr"].replace(0, 1)).round(4)
 
-            # Clean Team
             tm_curr_col = next((c for c in ["Team", "Clean_Team"] if c in df_p_curr.columns), "Team")
             df_p_curr["Clean_Team"] = df_p_curr[tm_curr_col].apply(normalize_team)
 
-            # Merge
             merged = pd.merge(
                 df_p_base[["Player", "Baseline_Stat", "GP_Base"]],
                 df_p_curr[["Player", "Clean_Team", "Current_Stat", "GP_Curr"]],
@@ -328,16 +347,11 @@ with tab2:
                 how="inner"
             )
 
-            # Baseline protection for small sample (< 10 GP)
             merged["Baseline_Stat"] = np.where(merged["GP_Base"] < 10, merged["Current_Stat"], merged["Baseline_Stat"])
-
-            # Filter minimum current GP
             merged = merged[merged["GP_Curr"] >= min_gp].copy()
 
-            # Assign Opponent from Schedule Map
             merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
 
-            # Opponent Matchup Factor
             def get_opp_factor(row):
                 opp = opponent_team_map.get(row["Clean_Team"])
                 if opp and opp in team_def_factors:
@@ -346,13 +360,11 @@ with tab2:
 
             merged["Matchup_Factor"] = merged.apply(get_opp_factor, axis=1)
 
-            # Dynamic Phase Weighting
             w_curr = phase_weight
             w_base = 1.0 - w_curr
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # Filter by Selected Matchups
             if selected_matchups:
                 active_teams = []
                 for label in selected_matchups:
@@ -361,7 +373,6 @@ with tab2:
                         active_teams.extend([meta["away"], meta["home"]])
                 merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
-            # Poisson Model Probabilities
             def calc_over_prob(mu, line):
                 k = int(np.floor(line))
                 return round((1.0 - poisson.cdf(k, mu)) * 100, 1)
@@ -393,7 +404,8 @@ with tab2:
                 display_df,
                 hide_index=True,
                 use_container_width=True,
-                column_config={"Select": st.column_config.CheckboxColumn(required=True)}
+                column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+                key=f"nhl_matrix_editor_{selected_market}_{selected_line}"
             )
 
             # ---------------------------------------------------------
@@ -490,7 +502,8 @@ with tab1:
                     help="Type American odds (e.g. -115 or +125)"
                 ),
                 "Delete": st.column_config.CheckboxColumn()
-            }
+            },
+            key="nhl_slip_editor"
         )
 
         if edited_slip["Delete"].any():
@@ -521,7 +534,6 @@ with tab1:
             odds_val = row.get("Nexus Odds (+/-)")
             prob = row.get("Model Prob (%)", 50.0)
             
-            # STRICT FILTER: Only evaluate if the user typed odds
             if odds_val is not None and pd.notna(odds_val) and str(odds_val).strip() not in ["", "None"]:
                 implied = american_to_implied(odds_val)
                 if implied is not None:
