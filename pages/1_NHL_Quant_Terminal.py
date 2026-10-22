@@ -41,7 +41,7 @@ if "nhl_bet_slip" not in st.session_state:
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
-# Universal NHL Team Normalizer (Full Names, Cities, Nicknames -> 3-Letter Code)
+# Comprehensive NHL Team Dictionary for Full Names & Abbreviations
 NHL_TEAM_DICT = {
     "ANA": ["ANA", "ANAHEIM", "DUCKS", "ANAHEIM DUCKS"],
     "BOS": ["BOS", "BOSTON", "BRUINS", "BOSTON BRUINS"],
@@ -161,7 +161,6 @@ with tab2:
             if team_files:
                 try:
                     t_dfs = [read_clean(f) for f in team_files]
-                    # Assign baseline vs current team stats
                     if len(t_dfs) >= 2:
                         f0_name = getattr(team_files[0], 'name', '').lower()
                         if "25-26" in f0_name or "curr" in f0_name:
@@ -175,7 +174,6 @@ with tab2:
                     def extract_def_rates(df):
                         cols = {c.lower(): c for c in df.columns}
                         tm_col = cols.get("team", cols.get("clean_team", None))
-                        # NST team stats use CA, SA, CA/60, or SA/60
                         ca_col = cols.get("ca", cols.get("sa", cols.get("ca/60", cols.get("sa/60", cols.get("shots against", None)))))
                         gp_col = cols.get("gp", cols.get("games played", None))
                         
@@ -187,7 +185,6 @@ with tab2:
                                 if pd.notna(raw_val) and raw_val > 0:
                                     gp = pd.to_numeric(r[gp_col], errors="coerce") if gp_col else 1
                                     gp = 1 if (pd.isna(gp) or gp <= 0) else gp
-                                    # If total count (>100), divide by GP; otherwise it's per 60/per game
                                     rate_val = (raw_val / gp) if raw_val > 100 else raw_val
                                     rates[tm_clean] = rate_val
                         return rates
@@ -195,7 +192,6 @@ with tab2:
                     rates_base = extract_def_rates(df_t_base)
                     rates_curr = extract_def_rates(df_t_curr)
 
-                    # Dynamic Blending of Team Defense
                     all_teams = set(list(rates_base.keys()) + list(rates_curr.keys()))
                     w_c = phase_weight
                     w_b = 1.0 - w_c
@@ -256,15 +252,8 @@ with tab2:
                 df_p_base = p_dfs[0]
                 df_p_curr = p_dfs[0].copy()
 
-            def find_col(df, candidates):
-                for cand in candidates:
-                    for col in df.columns:
-                        if cand.lower() == col.lower().strip():
-                            return col
-                return None
-
-            p_base_col = find_col(df_p_base, ["Player", "Name"])
-            p_curr_col = find_col(df_p_curr, ["Player", "Name"])
+            p_base_col = next((c for c in df_p_base.columns if c.strip().lower() in ["player", "name"]), None)
+            p_curr_col = next((c for c in df_p_curr.columns if c.strip().lower() in ["player", "name"]), None)
 
             if not p_base_col or not p_curr_col:
                 st.error("Could not find 'Player' column in CSV files.")
@@ -276,41 +265,43 @@ with tab2:
             merged = pd.merge(df_p_base, df_p_curr, on="Player", how="inner", suffixes=("_base", "_curr"))
 
             def get_player_rates(df, suffix):
-                gp_c = find_col(df, [f"GP_{suffix}", f"Games Played_{suffix}", "GP"])
-                sog_c = find_col(df, [f"Shots_{suffix}", f"SOG_{suffix}", f"Shots on Goal_{suffix}", "Shots", "SOG"])
-                s60_c = find_col(df, [f"S/60_{suffix}", f"Shots/60_{suffix}"])
-                toi_c = find_col(df, [f"TOI/GP_{suffix}", f"TOI_{suffix}"])
+                gp_candidates = [f"gp_{suffix}".lower(), "gp", f"games played_{suffix}".lower(), "games played"]
+                sog_candidates = [f"shots_{suffix}".lower(), "shots", f"sog_{suffix}".lower(), "sog", f"shots on goal_{suffix}".lower(), "shots on goal"]
 
-                gp = pd.to_numeric(df[gp_c], errors="coerce").fillna(1) if gp_c else pd.Series(1, index=df.index)
+                gp_col = next((c for c in df.columns if c.strip().lower() in gp_candidates), None)
+                sog_col = next((c for c in df.columns if c.strip().lower() in sog_candidates), None)
+
+                if gp_col:
+                    gp = pd.to_numeric(df[gp_col], errors="coerce").fillna(1)
+                else:
+                    gp = pd.Series(1, index=df.index)
+
                 gp_safe = gp.replace(0, 1)
 
-                if sog_c:
-                    sog_vals = pd.to_numeric(df[sog_c], errors="coerce").fillna(0)
-                    per_game = (sog_vals / gp_safe) if sog_vals.mean() > 10 else sog_vals
-                    return per_game.round(4), gp
-                elif s60_c and toi_c:
-                    s60 = pd.to_numeric(df[s60_c], errors="coerce").fillna(0)
-                    toi = pd.to_numeric(df[toi_c], errors="coerce").fillna(15)
-                    return (s60 * (toi / 60.0)).round(4), gp
+                if sog_col:
+                    raw_shots = pd.to_numeric(df[sog_col], errors="coerce").fillna(0)
+                    per_game = (raw_shots / gp_safe).round(4)
+                    return per_game, gp
+
                 return pd.Series(0.0, index=df.index), gp
 
             merged["Baseline_Stat"], merged["GP_Base"] = get_player_rates(merged, "base")
             merged["Current_Stat"], merged["GP_Curr"] = get_player_rates(merged, "curr")
 
-            # Clean Baseline Outliers: If baseline GP < 10, default baseline to current season rate
+            # Outlier protection for small-sample baseline entries
             merged["Baseline_Stat"] = np.where(merged["GP_Base"] < 10, merged["Current_Stat"], merged["Baseline_Stat"])
 
             # Filter by minimum GP in current season
             merged = merged[merged["GP_Curr"] >= min_gp].copy()
 
             # Clean Team
-            tm_col = find_col(merged, ["Team_curr", "Team", "Team_base", "Clean_Team"])
+            tm_col = next((c for c in ["Team_curr", "Team", "Team_base", "Clean_Team"] if c in merged.columns), None)
             merged["Clean_Team"] = merged[tm_col].apply(normalize_team) if tm_col else "NHL"
 
             # Assign Opponent from Schedule Map
             merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
 
-            # Assign Individual Matchup Factor (Opponent's defensive shot allowance rate)
+            # Opponent defensive shot allowance factor
             def get_opp_factor(row):
                 opp = opponent_team_map.get(row["Clean_Team"])
                 if opp and opp in team_def_factors:
@@ -319,7 +310,7 @@ with tab2:
 
             merged["Matchup_Factor"] = merged.apply(get_opp_factor, axis=1)
 
-            # Dynamic Weighting Blend (Player SOG)
+            # Dynamic Weighting Blend
             w_curr = phase_weight
             w_base = 1.0 - w_curr
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
@@ -334,7 +325,7 @@ with tab2:
                         active_teams.extend([meta["away"], meta["home"]])
                 merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
-            # Poisson Model Probability
+            # Poisson Model Probabilities
             def calc_over_prob(mu, line):
                 k = int(np.floor(line))
                 return round((1.0 - poisson.cdf(k, mu)) * 100, 1)
@@ -350,7 +341,7 @@ with tab2:
             merged["Market"] = "Shots on Goal (SOG)"
             merged["Line"] = selected_line
 
-            # Sort by Matchup_Proj descending
+            # Sort descending by Matchup_Proj
             merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
 
             st.markdown(f"### 📈 Slate Alt-Line Matrix (Shots on Goal (SOG) > {selected_line}):")
@@ -387,7 +378,7 @@ with tab2:
                                 "Opponent": row["Opponent"],
                                 "Market": row["Market"],
                                 "Line": row["Line"],
-                                "Nexus Odds (+/-)": 100,
+                                "Nexus Odds (+/-)": None,   # Blank by default
                                 "Model Prob (%)": row["Model_Over_Prob_%"],
                                 "Delete": False
                             }
@@ -399,8 +390,6 @@ with tab2:
 
             with col_auto_btn:
                 if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                    # Sort by a composite priority score: Matchup_Proj * Matchup_Factor
-                    # This guarantees we prioritize skaters in favorable shot-allowance matchups
                     scored_df = merged.copy()
                     scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
                     top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
@@ -414,7 +403,7 @@ with tab2:
                             "Opponent": row["Opponent"],
                             "Market": row["Market"],
                             "Line": row["Line"],
-                            "Nexus Odds (+/-)": 100,
+                            "Nexus Odds (+/-)": None,   # Blank by default
                             "Model Prob (%)": row["Model_Over_Prob_%"],
                             "Delete": False
                         }
@@ -433,7 +422,7 @@ with tab2:
 # -------------------------------------------------------------
 with tab1:
     st.subheader("📝 Checked Players & Nexus Odds Comparator")
-    st.caption("Type your Nexus Odds in the table. Real-time edges and compound parlay odds calculate live below.")
+    st.caption("Select your Sportsbook and enter Nexus Odds. Real-time edges calculate automatically once entered.")
 
     if st.button("🗑️ Clear Bet Slip"):
         st.session_state["nhl_bet_slip"] = []
@@ -448,6 +437,23 @@ with tab1:
             use_container_width=True,
             column_config={
                 "Include in Parlay": st.column_config.CheckboxColumn(),
+                "Sportsbook": st.column_config.SelectboxColumn(
+                    "Sportsbook",
+                    help="Select the book offering this line",
+                    options=[
+                        "FanDuel",
+                        "bet365",
+                        "DraftKings",
+                        "theScore Bet",
+                        "BetMGM",
+                        "BetRivers"
+                    ],
+                    required=True
+                ),
+                "Nexus Odds (+/-)": st.column_config.NumberColumn(
+                    "Nexus Odds (+/-)",
+                    help="Type American odds (e.g. -115 or +125)"
+                ),
                 "Delete": st.column_config.CheckboxColumn()
             }
         )
@@ -469,17 +475,37 @@ with tab1:
                 else:
                     return abs(odds) / (abs(odds) + 100.0)
             except:
-                return 0.5
+                return None
 
         parlay_mult = 1.0
         parlay_prob = 1.0
         active_legs = 0
 
         for row in st.session_state["nhl_bet_slip"]:
-            odds = row.get("Nexus Odds (+/-)", 100)
+            odds_val = row.get("Nexus Odds (+/-)")
             prob = row.get("Model Prob (%)", 50.0)
-            implied = american_to_implied(odds) * 100.0
-            edge = round(prob - implied, 1)
+            
+            # Check if user entered valid odds
+            if odds_val is not None and pd.notna(odds_val) and odds_val != "":
+                implied = american_to_implied(odds_val)
+                if implied is not None:
+                    implied_pct = implied * 100.0
+                    edge = round(prob - implied_pct, 1)
+                    edge_str = f"+{edge}%" if edge > 0 else f"{edge}%"
+                    odds_display = f"+{int(odds_val)}" if float(odds_val) > 0 else f"{int(odds_val)}"
+
+                    if row.get("Include in Parlay", True):
+                        active_legs += 1
+                        o = float(odds_val)
+                        mult = (o / 100.0 + 1.0) if o > 0 else (100.0 / abs(o) + 1.0)
+                        parlay_mult *= mult
+                        parlay_prob *= (prob / 100.0)
+                else:
+                    edge_str = "Enter Odds"
+                    odds_display = "None"
+            else:
+                edge_str = "Enter Odds"
+                odds_display = "None"
 
             edge_data.append({
                 "Sportsbook": row.get("Sportsbook", "FanDuel"),
@@ -487,20 +513,10 @@ with tab1:
                 "Opponent": row.get("Opponent", ""),
                 "Market": row.get("Market", "SOG"),
                 "Line": row.get("Line", 2.5),
-                "Odds": odds,
+                "Odds": odds_display,
                 "Model Prob": f"{prob}%",
-                "Edge %": f"+{edge}%" if edge > 0 else f"{edge}%"
+                "Edge %": edge_str
             })
-
-            if row.get("Include in Parlay", True):
-                active_legs += 1
-                try:
-                    o = float(odds)
-                    mult = (o / 100.0 + 1.0) if o > 0 else (100.0 / abs(o) + 1.0)
-                except:
-                    mult = 1.91
-                parlay_mult *= mult
-                parlay_prob *= (prob / 100.0)
 
         st.dataframe(pd.DataFrame(edge_data), hide_index=True, use_container_width=True)
 
@@ -528,8 +544,8 @@ with tab1:
             c3.metric("Model Slip True Prob", f"{true_prob_pct}%")
             c4.metric("Compound Slip Edge", f"+{compound_edge}%" if compound_edge > 0 else f"{compound_edge}%")
         else:
-            c1.metric("Checked Parlay Odds", "None")
-            c2.metric("Boosted", "None")
+            c1.metric("Checked Parlay Odds", "Enter Odds")
+            c2.metric("Boosted", "Enter Odds")
             c3.metric("Model Slip True Prob", "0.0%")
             c4.metric("Compound Slip Edge", "0.0%")
     else:
