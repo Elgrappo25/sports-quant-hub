@@ -20,7 +20,7 @@ phase_weight = st.sidebar.slider(
     max_value=100, 
     value=20, 
     step=5,
-    help="Phase 1: 20%, Phase 2: 40%, Phase 3: 70%, Phase 4: 100%"
+    help="Phase 1 (1-5 GP): 20%, Phase 2 (6-12 GP): 40%, Phase 3 (13-20 GP): 70%, Phase 4 (20+ GP): 100%"
 ) / 100.0
 
 min_gp = st.sidebar.slider(
@@ -47,10 +47,7 @@ tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix
 with tab2:
     st.subheader("Data Ingestion & Slate Filter")
     
-    col_date, col_drop = st.columns([1, 3])
-    with col_date:
-        slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"))
-    
+    col_drop = st.container()
     with col_drop:
         uploaded_files = st.file_uploader(
             "Drop all 4 Natural Stat Trick CSV files here", 
@@ -63,33 +60,36 @@ with tab2:
 
     active_files = st.session_state.get("nhl_uploaded_files", None)
 
-    # ---------------------------------------------------------
-    # 1. LIVE SCHEDULE VIA NHL API (For Selected Date)
-    # ---------------------------------------------------------
-    schedule_map = {}      # Team -> '@OPP' or 'vs OPP'
-    opponent_team_map = {} # Team -> OPP
-    game_matchup_options = []
+    col_target_date, col_target_line = st.columns([1, 1])
+    with col_target_date:
+        slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"))
+    with col_target_line:
+        selected_line = st.selectbox("Select Target Threshold Line", [1.5, 2.5, 3.5, 4.5], index=1)
 
+    # ---------------------------------------------------------
+    # 1. LIVE OFFICIAL NHL SCHEDULE FETCHER
+    # ---------------------------------------------------------
     date_str = slate_date.strftime("%Y-%m-%d")
+    schedule_pairs = []       # list of tuples: (away_abbr, home_abbr)
+    schedule_map = {}         # Team -> "@OPP" or "vs OPP"
+    opponent_team_map = {}    # Team -> OPP_TEAM
+
     try:
         url = f"https://api-web.nhle.com/v1/schedule/{date_str}"
-        res = requests.get(url, timeout=4)
+        res = requests.get(url, timeout=5)
         if res.status_code == 200:
-            sched_json = res.json()
-            game_weeks = sched_json.get("gameWeek", [])
-            for day in game_weeks:
+            data = res.json()
+            for day in data.get("gameWeek", []):
                 if day.get("date") == date_str:
                     for g in day.get("games", []):
                         away = g.get("awayTeam", {}).get("abbrev")
                         home = g.get("homeTeam", {}).get("abbrev")
                         if away and home:
+                            schedule_pairs.append((away, home))
                             schedule_map[away] = f"@{home}"
                             schedule_map[home] = f"vs {away}"
                             opponent_team_map[away] = home
                             opponent_team_map[home] = away
-                            label = f"{away} @ {home}"
-                            if label not in game_matchup_options:
-                                game_matchup_options.append(label)
     except Exception:
         pass
 
@@ -111,45 +111,83 @@ with tab2:
                 return df
 
             # ---------------------------------------------------------
-            # 2. DEFENSIVE MATCHUP FACTORS (From Games/Teams CSV)
+            # 2. OPPONENT DEFENSIVE MATCHUP FACTORS (CA / SA per game)
             # ---------------------------------------------------------
-            matchup_factors = {}
+            team_defense_factor = {}
             if game_files:
                 try:
                     g_dfs = [read_csv_clean(f) for f in game_files]
-                    # Select the file with team defense metrics
+                    # Use team/game file with team totals
                     gdf = max(g_dfs, key=len)
                     
                     team_col = next((c for c in gdf.columns if c.lower() in ["team", "clean_team"]), None)
                     ca_col = next((c for c in gdf.columns if c.lower() in ["ca", "sa", "shots against", "corsi against"]), None)
-                    
+                    gp_col = next((c for c in gdf.columns if c.lower() in ["gp", "games played"]), None)
+
                     if team_col and ca_col:
                         gdf["Def_Metric"] = pd.to_numeric(gdf[ca_col], errors="coerce").fillna(0)
-                        team_avg = gdf.groupby(team_col)["Def_Metric"].mean()
-                        league_avg = team_avg.mean()
-                        if league_avg > 0:
-                            for tm, val in team_avg.items():
-                                matchup_factors[tm.strip()] = round(val / league_avg, 4)
+                        if gp_col:
+                            gdf["GP_Num"] = pd.to_numeric(gdf[gp_col], errors="coerce").replace(0, 1)
+                            team_rates = gdf.groupby(team_col).apply(lambda d: (d["Def_Metric"] / d["GP_Num"]).mean())
+                        else:
+                            team_rates = gdf.groupby(team_col)["Def_Metric"].mean()
+
+                        league_mean_defense = team_rates.mean()
+                        if league_mean_defense > 0:
+                            for tm, rate in team_rates.items():
+                                # Ratio of shots/attempts allowed vs league average
+                                team_defense_factor[str(tm).strip()] = round(rate / league_mean_defense, 4)
                 except Exception:
                     pass
 
-            # ---------------------------------------------------------
-            # 3. GAME MATCHUP DROPDOWN FILTER
-            # ---------------------------------------------------------
-            selected_matchups = []
-            if game_matchup_options:
-                selected_matchups = st.multiselect(
-                    "🎯 Filter Specific Game Matchups (Sorted by Combined Factor)",
-                    options=game_matchup_options,
-                    default=game_matchup_options[:1] if len(game_matchup_options) > 0 else []
-                )
+            # Standard team abbreviation mapping
+            abbrev_fixes = {
+                "T.B": "TBL", "N.J": "NJD", "S.J": "SJS", "L.A": "LAK", 
+                "MON": "MTL", "WAS": "WSH", "VEG": "VGK", "UTA": "UTA"
+            }
+            # Remap defense factor dict with standard codes
+            cleaned_def_factors = {}
+            for k, v in team_defense_factor.items():
+                clean_k = abbrev_fixes.get(k, k)
+                cleaned_def_factors[clean_k] = v
 
             # ---------------------------------------------------------
-            # 4. PROCESS SKATER BASELINE & CURRENT SAMPLES
+            # 3. BUILD NFL-STYLE SCHEDULE BUTTONS (COMBINED FACTOR)
+            # ---------------------------------------------------------
+            game_options_dict = {}
+            for away, home in schedule_pairs:
+                away_def = cleaned_def_factors.get(away, 1.0)
+                home_def = cleaned_def_factors.get(home, 1.0)
+                # Combined game factor (pace of both defensive environments)
+                combined_factor = round(away_def + home_def, 2)
+                icon = "🔥" if combined_factor >= 2.05 else "⚡" if combined_factor >= 1.95 else ""
+                label = f"{away} @ {home} [{combined_factor} {icon}]".strip()
+                game_options_dict[label] = {
+                    "away": away,
+                    "home": home,
+                    "factor": combined_factor
+                }
+
+            # Sort games by combined pace descending (just like NFL)
+            sorted_game_labels = sorted(
+                game_options_dict.keys(), 
+                key=lambda x: game_options_dict[x]["factor"], 
+                reverse=True
+            )
+
+            # Multiselect with ALL games selected by default
+            selected_matchups = st.multiselect(
+                "🎯 Filter Specific Game Matchups (Sorted by Combined Factor)",
+                options=sorted_game_labels,
+                default=sorted_game_labels
+            )
+
+            # ---------------------------------------------------------
+            # 4. SKATER STAT PROCESSING & MATCHUP PROJECTIONS
             # ---------------------------------------------------------
             p_dfs = [read_csv_clean(f) for f in player_files]
             
-            # Larger row count is baseline 82-game dataset
+            # Baseline (82-game) is the file with more rows
             if len(p_dfs) >= 2:
                 if len(p_dfs[0]) > len(p_dfs[1]):
                     df_base, df_curr = p_dfs[0], p_dfs[1]
@@ -176,7 +214,6 @@ with tab2:
             df_base = df_base.rename(columns={base_p_col: "Player"})
             df_curr = df_curr.rename(columns={curr_p_col: "Player"})
 
-            # Merge baseline and current
             merged = pd.merge(df_base, df_curr, on="Player", how="inner", suffixes=("_base", "_curr"))
 
             def get_stat_and_gp(df, suffix):
@@ -190,8 +227,8 @@ with tab2:
                 if sog_col:
                     raw_sog = pd.to_numeric(df[sog_col], errors="coerce").fillna(0)
                     gp_safe = gp.replace(0, 1)
-                    # If already a rate (mean < 10), use directly, otherwise divide by GP
-                    per_game = raw_sog if raw_sog.mean() < 8 else (raw_sog / gp_safe)
+                    # If total counts (>15 mean), divide by GP; if already per game rate, keep
+                    per_game = (raw_sog / gp_safe) if raw_sog.mean() > 10 else raw_sog
                     return per_game, gp
                 elif s60_col and toi_col:
                     s60 = pd.to_numeric(df[s60_col], errors="coerce").fillna(0)
@@ -202,47 +239,43 @@ with tab2:
             merged["Baseline_Stat"], merged["GP_Base"] = get_stat_and_gp(merged, "base")
             merged["Current_Stat"], merged["GP_Curr"] = get_stat_and_gp(merged, "curr")
 
-            # Apply GP filter
+            # Apply minimum GP filter
             merged = merged[merged["GP_Curr"] >= min_gp].copy()
 
-            # Clean Team Names
+            # Clean Team
             t_col = find_col(merged, ["Team_curr", "Team", "Team_base", "Clean_Team"])
             merged["Clean_Team"] = merged[t_col].astype(str).str.strip() if t_col else "NHL"
-            
-            # Map standard abbreviations
-            team_fixes = {"T.B": "TBL", "N.J": "NJD", "S.J": "SJS", "L.A": "LAK", "WPG": "WPG", "MON": "MTL", "WAS": "WSH"}
-            merged["Clean_Team"] = merged["Clean_Team"].replace(team_fixes)
+            merged["Clean_Team"] = merged["Clean_Team"].replace(abbrev_fixes)
 
             # Assign Real Opponent
             merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
 
-            # Assign Opponent Matchup Factor
-            def resolve_factor(row):
+            # Resolve individual matchup factor: Opponent's defensive shot allowance
+            def get_individual_factor(row):
                 team = row["Clean_Team"]
                 opp = opponent_team_map.get(team, None)
-                if opp and opp in matchup_factors:
-                    return matchup_factors[opp]
+                if opp and opp in cleaned_def_factors:
+                    return cleaned_def_factors[opp]
                 return 1.0
 
-            merged["Matchup_Factor"] = merged.apply(resolve_factor, axis=1)
+            merged["Matchup_Factor"] = merged.apply(get_individual_factor, axis=1)
 
-            # Phase Weighted Projections
+            # Dynamic Phase Weighting
             w_curr = phase_weight
             w_base = 1.0 - w_curr
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # Filter by Selected Matchups if checked
+            # Filter skaters belonging only to the selected matchup pill buttons
             if selected_matchups:
                 active_teams = []
-                for m in selected_matchups:
-                    for tm in m.replace("@", " ").split():
-                        active_teams.append(tm.strip())
+                for label in selected_matchups:
+                    game_meta = game_options_dict.get(label)
+                    if game_meta:
+                        active_teams.extend([game_meta["away"], game_meta["home"]])
                 merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
-            # Alt-Line Threshold
-            selected_line = st.selectbox("Select SOG Line Threshold", [1.5, 2.5, 3.5, 4.5], index=1)
-
+            # Poisson Win Probabilities
             def calc_over_prob(mu, line):
                 k = int(np.floor(line))
                 prob_under_or_equal = poisson.cdf(k, mu)
@@ -262,6 +295,7 @@ with tab2:
             merged["Model_Over_Prob_%"] = merged["Matchup_Proj"].apply(lambda x: calc_over_prob(x, selected_line))
             merged["Fair_American_Odds"] = merged["Model_Over_Prob_%"].apply(prob_to_american)
             merged["Market"] = "Shots on Goal (SOG)"
+            merged["Line"] = selected_line
 
             merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
 
@@ -269,7 +303,7 @@ with tab2:
 
             display_cols = [
                 "Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_Stat",
-                "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market"
+                "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"
             ]
 
             display_df = merged[display_cols].round(4).copy()
@@ -293,7 +327,7 @@ with tab2:
                             "Player": row["Player"],
                             "Opponent": row["Opponent"],
                             "Market": row["Market"],
-                            "Line": selected_line,
+                            "Line": row["Line"],
                             "Nexus Odds (+/-)": 100,
                             "Model Prob (%)": row["Model_Over_Prob_%"],
                             "Delete": False
@@ -337,7 +371,7 @@ with tab1:
 
         st.session_state["nhl_bet_slip"] = edited_slip.to_dict(orient="records")
 
-        # Edge Evaluation
+        # Live Edge Evaluation
         st.markdown("### 📈 Live Edge Evaluation:")
         edge_data = []
 
@@ -384,7 +418,7 @@ with tab1:
 
         st.dataframe(pd.DataFrame(edge_data), hide_index=True, use_container_width=True)
 
-        # Live Compound Slip Calculator
+        # Compound Slip & Boost Calculator
         st.markdown("### 🚀 Live Compound Slip & Profit Boost Calculator")
         c1, c2, c3, c4 = st.columns(4)
 
