@@ -41,7 +41,6 @@ if "nhl_bet_slip" not in st.session_state:
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
-# Standard NHL 3-letter Team Map
 TEAM_ABBREV_MAP = {
     "ANA": "ANA", "BOS": "BOS", "BUF": "BUF", "CAR": "CAR", "CBJ": "CBJ",
     "CGY": "CGY", "CHI": "CHI", "COL": "COL", "DAL": "DAL", "DET": "DET",
@@ -76,7 +75,7 @@ with tab2:
     with col_target_line:
         selected_line = st.selectbox("Select Target Threshold Line", [1.5, 2.5, 3.5, 4.5], index=1)
 
-    # 1. LIVE OFFICIAL NHL SCHEDULE FETCHER
+    # 1. LIVE NHL SCHEDULE FOR TARGET DATE
     date_str = slate_date.strftime("%Y-%m-%d")
     schedule_pairs = []
     schedule_map = {}
@@ -119,15 +118,14 @@ with tab2:
                 return df
 
             # ---------------------------------------------------------
-            # 2. DEFENSIVE MATCHUP WEIGHTING (BASE + CURR BLEND)
+            # 2. DEFENSIVE MATCHUP WEIGHTING FROM TEAM CSVs
             # ---------------------------------------------------------
             team_def_factors = {}
             if game_files:
                 try:
                     g_dfs = [read_clean(f) for f in game_files]
-                    # Separate current vs baseline games file
-                    g_base = min(g_dfs, key=len) if len(g_dfs) >= 2 and ("25-26" not in getattr(g_dfs[0], 'name', '')) else g_dfs[0]
-                    g_curr = max(g_dfs, key=len) if len(g_dfs) >= 2 and g_base is not g_dfs[1] else (g_dfs[1] if len(g_dfs) >= 2 else g_dfs[0])
+                    g_base = min(g_dfs, key=len) if len(g_dfs) >= 2 else g_dfs[0]
+                    g_curr = max(g_dfs, key=len) if len(g_dfs) >= 2 else g_dfs[0]
 
                     def calc_team_rates(df):
                         cols = {c.lower(): c for c in df.columns}
@@ -153,7 +151,7 @@ with tab2:
 
                     blended_def = {}
                     for tm in all_teams:
-                        rb = rates_base.get(tm, list(rates_base.values())[0] if rates_base else 30.0)
+                        rb = rates_base.get(tm, 30.0)
                         rc = rates_curr.get(tm, rb)
                         blended_def[tm] = (w_b * rb) + (w_c * rc)
 
@@ -164,7 +162,7 @@ with tab2:
                     pass
 
             # ---------------------------------------------------------
-            # 3. BUILD NFL-STYLE SCHEDULE PILLS WITH COMBO PACE FACTORS
+            # 3. SCHEDULE PILLS WITH COMBO PACE FACTORS
             # ---------------------------------------------------------
             game_options_dict = {}
             for away, home in schedule_pairs:
@@ -192,18 +190,16 @@ with tab2:
             )
 
             # ---------------------------------------------------------
-            # 4. SKATER STAT EXTRACTION & DYNAMIC BLENDING
+            # 4. SKATER STATS & MATCHUP MULTIPLIER
             # ---------------------------------------------------------
             p_dfs = [read_clean(f) for f in player_files]
 
-            # Current season is 25-26 (contains 25-26 in name or is the rolling file)
             f0_name = getattr(player_files[0], 'name', '').lower()
             if "25-26" in f0_name or "curr" in f0_name:
                 df_curr, df_base = p_dfs[0], p_dfs[1]
             elif len(p_dfs) >= 2 and ("25-26" in getattr(player_files[1], 'name', '').lower() or "curr" in getattr(player_files[1], 'name', '').lower()):
                 df_curr, df_base = p_dfs[1], p_dfs[0]
             else:
-                # Baseline 82-game file usually has higher average GP
                 df_base, df_curr = (p_dfs[0], p_dfs[1]) if len(p_dfs[0]) > len(p_dfs[1]) else (p_dfs[1], p_dfs[0])
 
             def find_col(df, candidates):
@@ -236,7 +232,6 @@ with tab2:
 
                 if sog_c:
                     sog_vals = pd.to_numeric(df[sog_c], errors="coerce").fillna(0)
-                    # If file has total shot counts (> 10 mean), divide by GP; otherwise it's already a rate
                     per_game = (sog_vals / gp_safe) if sog_vals.mean() > 10 else sog_vals
                     return per_game.round(4), gp
                 elif s60_c and toi_c:
@@ -248,17 +243,13 @@ with tab2:
             merged["Baseline_Stat"], merged["GP_Base"] = get_player_rates(merged, "base")
             merged["Current_Stat"], merged["GP_Curr"] = get_player_rates(merged, "curr")
 
-            # Filter by minimum GP
             merged = merged[merged["GP_Curr"] >= min_gp].copy()
 
-            # Clean Team
             tm_col = find_col(merged, ["Team_curr", "Team", "Team_base", "Clean_Team"])
             merged["Clean_Team"] = merged[tm_col].astype(str).str.strip().map(lambda x: TEAM_ABBREV_MAP.get(x, x)) if tm_col else "NHL"
 
-            # Assign Opponent from Schedule Map
             merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
 
-            # Matchup Factor: The opponent's blended shot allowance factor
             def get_opp_factor(row):
                 opp = opponent_team_map.get(row["Clean_Team"])
                 if opp and opp in team_def_factors:
@@ -267,13 +258,12 @@ with tab2:
 
             merged["Matchup_Factor"] = merged.apply(get_opp_factor, axis=1)
 
-            # Dynamic Weighting Blend
             w_curr = phase_weight
             w_base = 1.0 - w_curr
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # Filter by Selected Game Matchups
+            # Matchup filter
             if selected_matchups:
                 active_teams = []
                 for label in selected_matchups:
@@ -282,7 +272,7 @@ with tab2:
                         active_teams.extend([meta["away"], meta["home"]])
                 merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
-            # Poisson Probability Calculations
+            # Poisson Model Probabilities
             def calc_over_prob(mu, line):
                 k = int(np.floor(line))
                 return round((1.0 - poisson.cdf(k, mu)) * 100, 1)
@@ -298,6 +288,7 @@ with tab2:
             merged["Market"] = "Shots on Goal (SOG)"
             merged["Line"] = selected_line
 
+            # Sort by Matchup_Proj descending so highest matchup-weighted players are on top
             merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
 
             st.markdown(f"### 📈 Slate Alt-Line Matrix (Shots on Goal (SOG) > {selected_line}):")
@@ -318,7 +309,7 @@ with tab2:
             )
 
             # ---------------------------------------------------------
-            # 5. NFL-STYLE DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED)
+            # 5. DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED TOP MATCHUPS)
             # ---------------------------------------------------------
             col_add_btn, col_auto_btn = st.columns(2)
 
@@ -346,9 +337,12 @@ with tab2:
 
             with col_auto_btn:
                 if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                    top5 = merged.head(5)
+                    # Filter for positive matchup environments (Factor >= 1.0) and sort by Matchup_Proj
+                    matchup_boosted = merged[merged["Matchup_Factor"] >= 0.98].sort_values(by="Matchup_Proj", ascending=False)
+                    top_candidates = matchup_boosted.head(5) if len(matchup_boosted) >= 5 else merged.head(5)
+                    
                     added_count = 0
-                    for _, row in top5.iterrows():
+                    for _, row in top_candidates.iterrows():
                         new_item = {
                             "Include in Parlay": True,
                             "Sportsbook": "FanDuel",
@@ -363,7 +357,7 @@ with tab2:
                         if not any(d["Player"] == new_item["Player"] for d in st.session_state["nhl_bet_slip"]):
                             st.session_state["nhl_bet_slip"].append(new_item)
                             added_count += 1
-                    st.success(f"Auto-loaded top {added_count} skaters with highest matchup projections into Tab 1!")
+                    st.success(f"Auto-loaded top {added_count} matchup-weighted skaters into Tab 1!")
 
         except Exception as e:
             st.error(f"Error processing files: {str(e)}")
