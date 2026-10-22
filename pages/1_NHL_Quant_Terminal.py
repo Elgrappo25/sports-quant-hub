@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
 from scipy.stats import poisson
 
 st.set_page_config(page_title="NHL Quant Terminal", page_icon="🏒", layout="wide")
@@ -62,9 +63,38 @@ with tab2:
 
     active_files = st.session_state.get("nhl_uploaded_files", None)
 
+    # ---------------------------------------------------------
+    # 1. LIVE SCHEDULE VIA NHL API (For Selected Date)
+    # ---------------------------------------------------------
+    schedule_map = {}      # Team -> '@OPP' or 'vs OPP'
+    opponent_team_map = {} # Team -> OPP
+    game_matchup_options = []
+
+    date_str = slate_date.strftime("%Y-%m-%d")
+    try:
+        url = f"https://api-web.nhle.com/v1/schedule/{date_str}"
+        res = requests.get(url, timeout=4)
+        if res.status_code == 200:
+            sched_json = res.json()
+            game_weeks = sched_json.get("gameWeek", [])
+            for day in game_weeks:
+                if day.get("date") == date_str:
+                    for g in day.get("games", []):
+                        away = g.get("awayTeam", {}).get("abbrev")
+                        home = g.get("homeTeam", {}).get("abbrev")
+                        if away and home:
+                            schedule_map[away] = f"@{home}"
+                            schedule_map[home] = f"vs {away}"
+                            opponent_team_map[away] = home
+                            opponent_team_map[home] = away
+                            label = f"{away} @ {home}"
+                            if label not in game_matchup_options:
+                                game_matchup_options.append(label)
+    except Exception:
+        pass
+
     if active_files and len(active_files) >= 2:
         try:
-            # Categorize files
             player_files = []
             game_files = []
             for f in active_files:
@@ -81,73 +111,31 @@ with tab2:
                 return df
 
             # ---------------------------------------------------------
-            # 1. PROCESS GAMES & SCHEDULE / OPPONENT MATCHUPS
+            # 2. DEFENSIVE MATCHUP FACTORS (From Games/Teams CSV)
             # ---------------------------------------------------------
-            schedule_map = {} # Team -> Opponent display (e.g. '@OTT' or 'vs FLA')
-            matchup_factors = {} # Team -> Opponent SA Factor
-            game_matchup_options = []
-
+            matchup_factors = {}
             if game_files:
                 try:
-                    # Pick current season games file (often has 25-26 or larger row count)
                     g_dfs = [read_csv_clean(f) for f in game_files]
-                    # Sort so current season is prioritized
-                    gdf = g_dfs[0]
-                    for g in g_dfs:
-                        if "25-26" in getattr(g, 'name', '') or len(g) < 1500:
-                            gdf = g
-                            break
-
-                    # Standardize column names
-                    cols = {c.lower(): c for c in gdf.columns}
-                    game_col = cols.get("game", cols.get("matchup", None))
-                    team_col = cols.get("team", None)
-                    ca_col = cols.get("ca", cols.get("sa", cols.get("shots against", None)))
-                    date_col = cols.get("date", None)
-
-                    if game_col and team_col:
-                        # Extract games for the selected date if date column exists
-                        target_str = slate_date.strftime("%Y-%m-%d")
-                        if date_col and target_str in gdf[date_col].astype(str).values:
-                            slate_games = gdf[gdf[date_col].astype(str) == target_str]
-                        else:
-                            # Fallback: take most recent games or all listed matchups
-                            slate_games = gdf
-
-                        for _, row in slate_games.iterrows():
-                            g_str = str(row[game_col])
-                            # Parse "FLA @ OTT" or "FLA - OTT"
-                            if "@" in g_str:
-                                parts = [p.strip() for p in g_str.split("@")]
-                                if len(parts) == 2:
-                                    away, home = parts[0], parts[1]
-                                    schedule_map[away] = f"@{home}"
-                                    schedule_map[home] = f"vs {away}"
-                                    label = f"{away} @ {home}"
-                                    if label not in game_matchup_options:
-                                        game_matchup_options.append(label)
-                            elif " - " in g_str:
-                                parts = [p.strip() for p in g_str.split(" - ")]
-                                if len(parts) == 2:
-                                    t1, t2 = parts[0], parts[1]
-                                    schedule_map[t1] = f"vs {t2}"
-                                    schedule_map[t2] = f"@{t1}"
-                                    label = f"{t1} vs {t2}"
-                                    if label not in game_matchup_options:
-                                        game_matchup_options.append(label)
-
-                    # Calculate Defensive Shot Suppression / Allowance Factors
+                    # Select the file with team defense metrics
+                    gdf = max(g_dfs, key=len)
+                    
+                    team_col = next((c for c in gdf.columns if c.lower() in ["team", "clean_team"]), None)
+                    ca_col = next((c for c in gdf.columns if c.lower() in ["ca", "sa", "shots against", "corsi against"]), None)
+                    
                     if team_col and ca_col:
-                        team_def = gdf.groupby(team_col)[ca_col].apply(lambda s: pd.to_numeric(s, errors='coerce').mean()).dropna()
-                        league_avg = team_def.mean()
+                        gdf["Def_Metric"] = pd.to_numeric(gdf[ca_col], errors="coerce").fillna(0)
+                        team_avg = gdf.groupby(team_col)["Def_Metric"].mean()
+                        league_avg = team_avg.mean()
                         if league_avg > 0:
-                            for tm, val in team_def.items():
-                                # Matchup factor is how many shots the OPPONENT allows relative to league average
-                                matchup_factors[tm] = round(val / league_avg, 4)
-                except Exception as ge:
-                    st.warning(f"Note: Schedule/matchup parsing warning: {str(ge)}")
+                            for tm, val in team_avg.items():
+                                matchup_factors[tm.strip()] = round(val / league_avg, 4)
+                except Exception:
+                    pass
 
-            # Matchup Multi-Select Filter
+            # ---------------------------------------------------------
+            # 3. GAME MATCHUP DROPDOWN FILTER
+            # ---------------------------------------------------------
             selected_matchups = []
             if game_matchup_options:
                 selected_matchups = st.multiselect(
@@ -157,11 +145,11 @@ with tab2:
                 )
 
             # ---------------------------------------------------------
-            # 2. PROCESS PLAYERS (BASELINE VS CURRENT)
+            # 4. PROCESS SKATER BASELINE & CURRENT SAMPLES
             # ---------------------------------------------------------
             p_dfs = [read_csv_clean(f) for f in player_files]
             
-            # Identify current vs prior: baseline has larger file / more rows (full 82 game season)
+            # Larger row count is baseline 82-game dataset
             if len(p_dfs) >= 2:
                 if len(p_dfs[0]) > len(p_dfs[1]):
                     df_base, df_curr = p_dfs[0], p_dfs[1]
@@ -171,48 +159,39 @@ with tab2:
                 df_base = p_dfs[0]
                 df_curr = p_dfs[0].copy()
 
-            def get_col(df, candidates):
+            def find_col(df, candidates):
                 for c in candidates:
                     for col in df.columns:
                         if c.lower() == col.lower().strip():
                             return col
                 return None
 
-            base_p_col = get_col(df_base, ["Player", "Name"])
-            curr_p_col = get_col(df_curr, ["Player", "Name"])
+            base_p_col = find_col(df_base, ["Player", "Name"])
+            curr_p_col = find_col(df_curr, ["Player", "Name"])
 
             if not base_p_col or not curr_p_col:
-                st.error("Could not find 'Player' column in player CSVs.")
+                st.error("Could not locate 'Player' column in player CSVs.")
                 st.stop()
 
-            # Align Player & Team names
             df_base = df_base.rename(columns={base_p_col: "Player"})
             df_curr = df_curr.rename(columns={curr_p_col: "Player"})
 
-            base_team_col = get_col(df_base, ["Team"])
-            curr_team_col = get_col(df_curr, ["Team"])
-
-            # Merge baseline & current
+            # Merge baseline and current
             merged = pd.merge(df_base, df_curr, on="Player", how="inner", suffixes=("_base", "_curr"))
 
-            # Robust helper to extract SOG and GP
-            def extract_stat_per_game(df, suffix):
-                gp_col = get_col(df, [f"GP_{suffix}", f"Games Played_{suffix}", "GP"])
-                sog_col = get_col(df, [f"Shots_{suffix}", f"SOG_{suffix}", f"Shots on Goal_{suffix}", "Shots", "SOG"])
-                s60_col = get_col(df, [f"S/60_{suffix}", f"Shots/60_{suffix}"])
-                toi_col = get_col(df, [f"TOI/GP_{suffix}", f"TOI_{suffix}"])
+            def get_stat_and_gp(df, suffix):
+                gp_col = find_col(df, [f"GP_{suffix}", f"Games Played_{suffix}", "GP"])
+                sog_col = find_col(df, [f"Shots_{suffix}", f"SOG_{suffix}", f"Shots on Goal_{suffix}", "Shots", "SOG"])
+                s60_col = find_col(df, [f"S/60_{suffix}", f"Shots/60_{suffix}"])
+                toi_col = find_col(df, [f"TOI/GP_{suffix}", f"TOI_{suffix}"])
 
                 gp = pd.to_numeric(df[gp_col], errors="coerce").fillna(1) if gp_col else pd.Series(1, index=df.index)
-                
-                # If Shots total exists, compute Shots / GP
+
                 if sog_col:
-                    shots = pd.to_numeric(df[sog_col], errors="coerce").fillna(0)
+                    raw_sog = pd.to_numeric(df[sog_col], errors="coerce").fillna(0)
                     gp_safe = gp.replace(0, 1)
-                    # If the numbers are already small rates (e.g. 2.5), don't divide by 82
-                    if shots.mean() < 10:
-                        per_game = shots
-                    else:
-                        per_game = shots / gp_safe
+                    # If already a rate (mean < 10), use directly, otherwise divide by GP
+                    per_game = raw_sog if raw_sog.mean() < 8 else (raw_sog / gp_safe)
                     return per_game, gp
                 elif s60_col and toi_col:
                     s60 = pd.to_numeric(df[s60_col], errors="coerce").fillna(0)
@@ -220,43 +199,46 @@ with tab2:
                     return (s60 * (toi / 60.0)), gp
                 return pd.Series(0.0, index=df.index), gp
 
-            merged["Baseline_Stat"], merged["GP_Base"] = extract_stat_per_game(merged, "base")
-            merged["Current_Stat"], merged["GP_Curr"] = extract_stat_per_game(merged, "curr")
+            merged["Baseline_Stat"], merged["GP_Base"] = get_stat_and_gp(merged, "base")
+            merged["Current_Stat"], merged["GP_Curr"] = get_stat_and_gp(merged, "curr")
 
-            # Filter minimum GP
+            # Apply GP filter
             merged = merged[merged["GP_Curr"] >= min_gp].copy()
 
-            # Clean Team
-            t_col = f"{curr_team_col}_curr" if f"{curr_team_col}_curr" in merged.columns else ("Team_curr" if "Team_curr" in merged.columns else "Team_base")
-            merged["Clean_Team"] = merged[t_col].astype(str).str.strip() if t_col in merged.columns else "NHL"
-
-            # Clean Team abbreviation mapping (e.g. T.B -> TBL)
-            team_fixes = {"T.B": "TBL", "N.J": "NJD", "S.J": "SJS", "L.A": "LAK"}
+            # Clean Team Names
+            t_col = find_col(merged, ["Team_curr", "Team", "Team_base", "Clean_Team"])
+            merged["Clean_Team"] = merged[t_col].astype(str).str.strip() if t_col else "NHL"
+            
+            # Map standard abbreviations
+            team_fixes = {"T.B": "TBL", "N.J": "NJD", "S.J": "SJS", "L.A": "LAK", "WPG": "WPG", "MON": "MTL", "WAS": "WSH"}
             merged["Clean_Team"] = merged["Clean_Team"].replace(team_fixes)
 
-            # Assign Opponent from Schedule Map
+            # Assign Real Opponent
             merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
 
-            # Assign Matchup Factor: look up the opponent's defensive suppression factor
-            def get_opponent_factor(row):
-                opp = str(row["Opponent"]).replace("@", "").replace("vs", "").strip()
-                return matchup_factors.get(opp, 1.0)
+            # Assign Opponent Matchup Factor
+            def resolve_factor(row):
+                team = row["Clean_Team"]
+                opp = opponent_team_map.get(team, None)
+                if opp and opp in matchup_factors:
+                    return matchup_factors[opp]
+                return 1.0
 
-            merged["Matchup_Factor"] = merged.apply(get_opponent_factor, axis=1)
+            merged["Matchup_Factor"] = merged.apply(resolve_factor, axis=1)
 
-            # Dynamic Phase Weighting
+            # Phase Weighted Projections
             w_curr = phase_weight
             w_base = 1.0 - w_curr
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # Filter by selected game matchups if user selected any
+            # Filter by Selected Matchups if checked
             if selected_matchups:
-                valid_teams = []
-                for gm in selected_matchups:
-                    for t in gm.replace("@", " ").replace("vs", " ").split():
-                        valid_teams.append(t.strip())
-                merged = merged[merged["Clean_Team"].isin(valid_teams)].copy()
+                active_teams = []
+                for m in selected_matchups:
+                    for tm in m.replace("@", " ").split():
+                        active_teams.append(tm.strip())
+                merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
             # Alt-Line Threshold
             selected_line = st.selectbox("Select SOG Line Threshold", [1.5, 2.5, 3.5, 4.5], index=1)
@@ -281,7 +263,6 @@ with tab2:
             merged["Fair_American_Odds"] = merged["Model_Over_Prob_%"].apply(prob_to_american)
             merged["Market"] = "Shots on Goal (SOG)"
 
-            # Sort descending by projection
             merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
 
             st.markdown(f"### 📈 Slate Alt-Line Matrix (Shots on Goal (SOG) > {selected_line}):")
@@ -301,7 +282,7 @@ with tab2:
                 column_config={"Select": st.column_config.CheckboxColumn(required=True)}
             )
 
-            # Add checked players to bet slip
+            # Add to bet slip
             selected_rows = edited_df[edited_df["Select"] == True]
             if not selected_rows.empty:
                 if st.button("➕ Add Selected to Odds Comparator Slip"):
