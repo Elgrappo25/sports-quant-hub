@@ -41,7 +41,7 @@ if "nhl_bet_slip" not in st.session_state:
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
-# Comprehensive NHL Team Dictionary for Full Names & Abbreviations
+# Universal Team Mapping for all 32 NHL franchises
 NHL_TEAM_DICT = {
     "ANA": ["ANA", "ANAHEIM", "DUCKS", "ANAHEIM DUCKS"],
     "BOS": ["BOS", "BOSTON", "BRUINS", "BOSTON BRUINS"],
@@ -96,7 +96,7 @@ with tab2:
     st.subheader("Single Dropzone: Natural Stat Trick Ingestion")
     
     uploaded_files = st.file_uploader(
-        "Drop all 4 Natural Stat Trick CSV files here (2 Player files, 2 Game/Team files)", 
+        "Drop all 4 Natural Stat Trick CSV files here", 
         type=["csv"], 
         accept_multiple_files=True
     )
@@ -161,36 +161,35 @@ with tab2:
             if team_files:
                 try:
                     t_dfs = [read_clean(f) for f in team_files]
-                    if len(t_dfs) >= 2:
-                        f0_name = getattr(team_files[0], 'name', '').lower()
-                        if "25-26" in f0_name or "curr" in f0_name:
-                            df_t_curr, df_t_base = t_dfs[0], t_dfs[1]
+                    
+                    # games 25-26.csv has SA/60 (Baseline 82 games)
+                    # games.csv has SA and TOI counts (Current season)
+                    df_t_base = None
+                    df_t_curr = None
+                    for t_df in t_dfs:
+                        if "sa/60" in [c.lower() for c in t_df.columns]:
+                            df_t_base = t_df
                         else:
-                            df_t_base, df_t_curr = t_dfs[0], t_dfs[1]
-                    else:
-                        df_t_base = t_dfs[0]
-                        df_t_curr = t_dfs[0].copy()
+                            df_t_curr = t_df
 
-                    def extract_def_rates(df):
-                        cols = {c.lower(): c for c in df.columns}
-                        tm_col = cols.get("team", cols.get("clean_team", None))
-                        ca_col = cols.get("ca", cols.get("sa", cols.get("ca/60", cols.get("sa/60", cols.get("shots against", None)))))
-                        gp_col = cols.get("gp", cols.get("games played", None))
-                        
-                        rates = {}
-                        if tm_col and ca_col:
-                            for _, r in df.iterrows():
-                                tm_clean = normalize_team(r[tm_col])
-                                raw_val = pd.to_numeric(r[ca_col], errors="coerce")
-                                if pd.notna(raw_val) and raw_val > 0:
-                                    gp = pd.to_numeric(r[gp_col], errors="coerce") if gp_col else 1
-                                    gp = 1 if (pd.isna(gp) or gp <= 0) else gp
-                                    rate_val = (raw_val / gp) if raw_val > 100 else raw_val
-                                    rates[tm_clean] = rate_val
-                        return rates
+                    if df_t_base is None: df_t_base = t_dfs[0]
+                    if df_t_curr is None: df_t_curr = t_dfs[-1]
 
-                    rates_base = extract_def_rates(df_t_base)
-                    rates_curr = extract_def_rates(df_t_curr)
+                    rates_base = {}
+                    for _, r in df_t_base.iterrows():
+                        tm = normalize_team(r["Team"])
+                        sa_col = next((c for c in df_t_base.columns if c.lower() in ["sa/60", "ca/60", "sa"]), None)
+                        if sa_col and pd.notna(r[sa_col]):
+                            rates_base[tm] = float(r[sa_col])
+
+                    rates_curr = {}
+                    for _, r in df_t_curr.iterrows():
+                        tm = normalize_team(r["Team"])
+                        sa_val = pd.to_numeric(r.get("SA", r.get("CA", 0)), errors="coerce")
+                        toi_val = pd.to_numeric(r.get("TOI", 60), errors="coerce")
+                        if pd.notna(sa_val) and pd.notna(toi_val) and toi_val > 0:
+                            # Convert count to rate per 60
+                            rates_curr[tm] = (sa_val / (toi_val / 60.0))
 
                     all_teams = set(list(rates_base.keys()) + list(rates_curr.keys()))
                     w_c = phase_weight
@@ -198,16 +197,16 @@ with tab2:
 
                     blended_rates = {}
                     for tm in all_teams:
-                        rb = rates_base.get(tm, 30.0)
+                        rb = rates_base.get(tm, 28.5)
                         rc = rates_curr.get(tm, rb)
                         blended_rates[tm] = (w_b * rb) + (w_c * rc)
 
-                    league_mean = np.mean(list(blended_rates.values())) if blended_rates else 30.0
+                    league_mean = np.mean(list(blended_rates.values())) if blended_rates else 28.5
                     for tm, val in blended_rates.items():
                         team_def_factors[tm] = round(val / league_mean, 4)
 
                 except Exception as te:
-                    st.warning(f"Team defense calculation note: {str(te)}")
+                    st.warning(f"Team defense note: {str(te)}")
 
             # ---------------------------------------------------------
             # 3. SCHEDULE PILLS WITH COMBO PACE FACTORS
@@ -238,70 +237,69 @@ with tab2:
             )
 
             # ---------------------------------------------------------
-            # 4. SKATER STATS & DYNAMIC BASELINE/CURRENT BLEND
+            # 4. SKATER STATS: PRECISE RATE & COUNT SEPARATION
             # ---------------------------------------------------------
             p_dfs = [read_clean(f) for f in player_files]
 
-            if len(p_dfs) >= 2:
-                f0_name = getattr(player_files[0], 'name', '').lower()
-                if "25-26" in f0_name or "curr" in f0_name:
-                    df_p_curr, df_p_base = p_dfs[0], p_dfs[1]
+            # Player Season Totals - Natural Stat Trick 25-26.csv has "Shots/60" and "TOI/GP" (Baseline)
+            # Player Season Totals - Natural Stat Trick.csv has "Shots" and "GP" (Current Season)
+            df_p_base = None
+            df_p_curr = None
+            for p_df in p_dfs:
+                if "shots/60" in [c.lower() for c in p_df.columns]:
+                    df_p_base = p_df
                 else:
-                    df_p_base, df_p_curr = p_dfs[0], p_dfs[1]
-            else:
-                df_p_base = p_dfs[0]
-                df_p_curr = p_dfs[0].copy()
+                    df_p_curr = p_df
 
+            if df_p_base is None: df_p_base = p_dfs[0]
+            if df_p_curr is None: df_p_curr = p_dfs[-1]
+
+            # Standardize Player & Team Columns
             p_base_col = next((c for c in df_p_base.columns if c.strip().lower() in ["player", "name"]), None)
             p_curr_col = next((c for c in df_p_curr.columns if c.strip().lower() in ["player", "name"]), None)
-
-            if not p_base_col or not p_curr_col:
-                st.error("Could not find 'Player' column in CSV files.")
-                st.stop()
 
             df_p_base = df_p_base.rename(columns={p_base_col: "Player"})
             df_p_curr = df_p_curr.rename(columns={p_curr_col: "Player"})
 
-            merged = pd.merge(df_p_base, df_p_curr, on="Player", how="inner", suffixes=("_base", "_curr"))
+            # Calculate True Baseline SOG/game: (Shots/60) * (TOI/GP / 60)
+            df_p_base["GP_Base"] = pd.to_numeric(df_p_base.get("GP", 82), errors="coerce").fillna(82)
+            if "Shots/60" in df_p_base.columns and "TOI/GP" in df_p_base.columns:
+                s60 = pd.to_numeric(df_p_base["Shots/60"], errors="coerce").fillna(0)
+                toi_gp = pd.to_numeric(df_p_base["TOI/GP"], errors="coerce").fillna(15)
+                df_p_base["Baseline_Stat"] = (s60 * (toi_gp / 60.0)).round(4)
+            else:
+                shots_raw = pd.to_numeric(df_p_base.get("Shots", 0), errors="coerce").fillna(0)
+                df_p_base["Baseline_Stat"] = (shots_raw / df_p_base["GP_Base"].replace(0, 1)).round(4)
 
-            def get_player_rates(df, suffix):
-                gp_candidates = [f"gp_{suffix}".lower(), "gp", f"games played_{suffix}".lower(), "games played"]
-                sog_candidates = [f"shots_{suffix}".lower(), "shots", f"sog_{suffix}".lower(), "sog", f"shots on goal_{suffix}".lower(), "shots on goal"]
+            # Calculate True Current Season SOG/game: Shots / GP
+            df_p_curr["GP_Curr"] = pd.to_numeric(df_p_curr.get("GP", 1), errors="coerce").fillna(1)
+            shots_curr_raw = pd.to_numeric(df_p_curr.get("Shots", 0), errors="coerce").fillna(0)
+            df_p_curr["Current_Stat"] = (shots_curr_raw / df_p_curr["GP_Curr"].replace(0, 1)).round(4)
 
-                gp_col = next((c for c in df.columns if c.strip().lower() in gp_candidates), None)
-                sog_col = next((c for c in df.columns if c.strip().lower() in sog_candidates), None)
+            # Team Column
+            tm_base_col = next((c for c in ["Team", "Clean_Team"] if c in df_p_base.columns), "Team")
+            tm_curr_col = next((c for c in ["Team", "Clean_Team"] if c in df_p_curr.columns), "Team")
+            df_p_base["Clean_Team"] = df_p_base[tm_base_col].apply(normalize_team)
+            df_p_curr["Clean_Team"] = df_p_curr[tm_curr_col].apply(normalize_team)
 
-                if gp_col:
-                    gp = pd.to_numeric(df[gp_col], errors="coerce").fillna(1)
-                else:
-                    gp = pd.Series(1, index=df.index)
+            # Merge on Player
+            merged = pd.merge(
+                df_p_base[["Player", "Baseline_Stat", "GP_Base"]],
+                df_p_curr[["Player", "Clean_Team", "Current_Stat", "GP_Curr"]],
+                on="Player",
+                how="inner"
+            )
 
-                gp_safe = gp.replace(0, 1)
-
-                if sog_col:
-                    raw_shots = pd.to_numeric(df[sog_col], errors="coerce").fillna(0)
-                    per_game = (raw_shots / gp_safe).round(4)
-                    return per_game, gp
-
-                return pd.Series(0.0, index=df.index), gp
-
-            merged["Baseline_Stat"], merged["GP_Base"] = get_player_rates(merged, "base")
-            merged["Current_Stat"], merged["GP_Curr"] = get_player_rates(merged, "curr")
-
-            # Outlier protection for small-sample baseline entries
+            # Outlier protection: If player had < 10 GP in baseline, use current season stat
             merged["Baseline_Stat"] = np.where(merged["GP_Base"] < 10, merged["Current_Stat"], merged["Baseline_Stat"])
 
-            # Filter by minimum GP in current season
+            # Filter minimum current season GP
             merged = merged[merged["GP_Curr"] >= min_gp].copy()
-
-            # Clean Team
-            tm_col = next((c for c in ["Team_curr", "Team", "Team_base", "Clean_Team"] if c in merged.columns), None)
-            merged["Clean_Team"] = merged[tm_col].apply(normalize_team) if tm_col else "NHL"
 
             # Assign Opponent from Schedule Map
             merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
 
-            # Opponent defensive shot allowance factor
+            # Matchup Factor: Opponent defense multiplier
             def get_opp_factor(row):
                 opp = opponent_team_map.get(row["Clean_Team"])
                 if opp and opp in team_def_factors:
@@ -310,7 +308,7 @@ with tab2:
 
             merged["Matchup_Factor"] = merged.apply(get_opp_factor, axis=1)
 
-            # Dynamic Weighting Blend
+            # Dynamic Phase Weighting
             w_curr = phase_weight
             w_base = 1.0 - w_curr
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
@@ -378,7 +376,7 @@ with tab2:
                                 "Opponent": row["Opponent"],
                                 "Market": row["Market"],
                                 "Line": row["Line"],
-                                "Nexus Odds (+/-)": None,   # Blank by default
+                                "Nexus Odds (+/-)": None,
                                 "Model Prob (%)": row["Model_Over_Prob_%"],
                                 "Delete": False
                             }
@@ -403,7 +401,7 @@ with tab2:
                             "Opponent": row["Opponent"],
                             "Market": row["Market"],
                             "Line": row["Line"],
-                            "Nexus Odds (+/-)": None,   # Blank by default
+                            "Nexus Odds (+/-)": None,
                             "Model Prob (%)": row["Model_Over_Prob_%"],
                             "Delete": False
                         }
@@ -485,7 +483,6 @@ with tab1:
             odds_val = row.get("Nexus Odds (+/-)")
             prob = row.get("Model Prob (%)", 50.0)
             
-            # Check if user entered valid odds
             if odds_val is not None and pd.notna(odds_val) and odds_val != "":
                 implied = american_to_implied(odds_val)
                 if implied is not None:
