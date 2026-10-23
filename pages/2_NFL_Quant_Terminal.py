@@ -1,328 +1,616 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import date
-from modules.nfl_engine import (
-    compute_nfl_team_baselines,
-    calculate_matchup_factors_for_slate,
-    process_nfl_player_matrix,
-    prob_to_american_odds,
-    WEEK_7_SCHEDULE
+import requests
+import re
+from scipy.stats import poisson, norm
+
+st.set_page_config(page_title="NFL Quant Terminal", page_icon="🏈", layout="wide")
+
+st.title("🏈 NFL Quant Terminal: Production Suite")
+st.markdown("Play-by-play data processing, schedule pace adjustments, matchup dampening, and alt-line prop accumulators.")
+
+# -------------------------------------------------------------
+# PERSISTENT SESSION STATE INITIALIZATION
+# -------------------------------------------------------------
+if "nfl_bet_slip" not in st.session_state:
+    st.session_state["nfl_bet_slip"] = []
+
+if "nfl_sample_weight" not in st.session_state:
+    st.session_state["nfl_sample_weight"] = 50
+
+if "nfl_min_gp" not in st.session_state:
+    st.session_state["nfl_min_gp"] = 2
+
+if "nfl_profit_boost" not in st.session_state:
+    st.session_state["nfl_profit_boost"] = 30
+
+if "nfl_raw_pbp" not in st.session_state:
+    st.session_state["nfl_raw_pbp"] = None
+
+# -------------------------------------------------------------
+# SIDEBAR CONFIGURATION
+# -------------------------------------------------------------
+st.sidebar.header("🏈 NFL Model Settings")
+
+phase_weight = st.sidebar.slider(
+    "Defensive Matchup Weight (%)", 
+    min_value=0, 
+    max_value=100, 
+    step=5,
+    key="nfl_sample_weight",
+    help="Blends raw opponent defensive allowances with league-average baseline (1.0)."
+) / 100.0
+
+min_gp = st.sidebar.slider(
+    "Minimum Games Played Filter",
+    min_value=1,
+    max_value=10,
+    step=1,
+    key="nfl_min_gp"
 )
 
-st.set_page_config(page_title="NFL Quant Terminal: Production Suite", page_icon="🏈", layout="wide")
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 Market-Tailored Edge Filters")
+profit_boost = st.sidebar.number_input(
+    "Active Sportsbook Profit Boost (%)", 
+    min_value=0, 
+    max_value=100, 
+    step=5,
+    key="nfl_profit_boost"
+)
 
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; }
-    .stMetric { background-color: #161b22; padding: 15px; border-radius: 10px; border: 1px solid #30363d; }
-    .stDataFrame { border-radius: 10px; overflow: hidden; }
-    </style>
-""", unsafe_allow_html=True)
+tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
-# Helper functions for American Odds calculation
-def american_to_decimal(odds):
+# -------------------------------------------------------------
+# ROBUST TEAM NORMALIZER
+# -------------------------------------------------------------
+def normalize_nfl_team(raw_name):
+    if not raw_name or pd.isna(raw_name):
+        return "NFL"
+    cleaned = str(raw_name).strip().upper()
+    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)
+
+    alias_map = {
+        "ARI": ["ARI", "ARIZONA", "CARDINALS"],
+        "ATL": ["ATL", "ATLANTA", "FALCONS"],
+        "BAL": ["BAL", "BALTIMORE", "RAVENS"],
+        "BUF": ["BUF", "BUFFALO", "BILLS"],
+        "CAR": ["CAR", "CAROLINA", "PANTHERS"],
+        "CHI": ["CHI", "CHICAGO", "BEARS"],
+        "CIN": ["CIN", "CINCINNATI", "BENGALS"],
+        "CLE": ["CLE", "CLEVELAND", "BROWNS"],
+        "DAL": ["DAL", "DALLAS", "COWBOYS"],
+        "DEN": ["DEN", "DENVER", "BRONCOS"],
+        "DET": ["DET", "DETROIT", "LIONS"],
+        "GB":  ["GB", "GNB", "GREEN BAY", "PACKERS"],
+        "HOU": ["HOU", "HOUSTON", "TEXANS"],
+        "IND": ["IND", "INDIANAPOLIS", "COLTS"],
+        "JAX": ["JAX", "JAC", "JACKSONVILLE", "JAGUARS"],
+        "KC":  ["KC", "KAN", "KANSAS CITY", "CHIEFS"],
+        "LV":  ["LV", "LVR", "LAS VEGAS", "RAIDERS", "OAK"],
+        "LAC": ["LAC", "LA CHARGERS", "CHARGERS", "SD"],
+        "LAR": ["LAR", "LA RAMS", "RAMS"],
+        "MIA": ["MIA", "MIAMI", "DOLPHINS"],
+        "MIN": ["MIN", "MINNESOTA", "VIKINGS"],
+        "NE":  ["NE", "NWE", "NEW ENGLAND", "PATRIOTS"],
+        "NO":  ["NO", "NOR", "NEW ORLEANS", "SAINTS"],
+        "NYG": ["NYG", "GIANTS", "NY GIANTS"],
+        "NYJ": ["NYJ", "JETS", "NY JETS"],
+        "PHI": ["PHI", "PHILADELPHIA", "EAGLES"],
+        "PIT": ["PIT", "PITTSBURGH", "STEELERS"],
+        "SF":  ["SF", "SFO", "SAN FRANCISCO", "49ERS"],
+        "SEA": ["SEA", "SEATTLE", "SEAHAWKS"],
+        "TB":  ["TB", "TAM", "TAMPA", "TAMPA BAY", "BUCCANEERS"],
+        "TEN": ["TEN", "TENNESSEE", "TITANS"],
+        "WAS": ["WAS", "WSH", "WASHINGTON", "COMMANDERS"]
+    }
+    for code, aliases in alias_map.items():
+        if cleaned == code or any(cleaned == a for a in aliases) or any(a in cleaned for a in aliases):
+            return code
+    return cleaned[:3]
+
+# -------------------------------------------------------------
+# TAB 2: DATA INGESTION & MATRIX
+# -------------------------------------------------------------
+with tab2:
+    st.subheader("Single Dropzone: NFL Savant Play-by-Play Ingestion")
+    
+    uploaded_file = st.file_uploader(
+        "Drop your pbp-2026.csv file here", 
+        type=["csv"], 
+        key="nfl_uploader"
+    )
+
+    if uploaded_file is not None:
+        try:
+            uploaded_file.seek(0)
+            st.session_state["nfl_raw_pbp"] = pd.read_csv(uploaded_file, low_memory=False)
+        except Exception as ue:
+            st.error(f"Error reading pbp file: {str(ue)}")
+
+    col_market, col_line = st.columns([1, 1])
+    with col_market:
+        selected_market = st.selectbox(
+            "Select Target Prop Market",
+            ["Receiving Yards", "Receptions", "Anytime Touchdown", "Rushing Yards", "Passing Yards"],
+            key="nfl_market_selector"
+        )
+
+    market_threshold_map = {
+        "Receiving Yards": [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5],
+        "Receptions": [1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
+        "Anytime Touchdown": [0.5],
+        "Rushing Yards": [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5],
+        "Passing Yards": [199.5, 224.5, 249.5, 274.5, 299.5]
+    }
+    default_indices = {
+        "Receiving Yards": 0,
+        "Receptions": 1,
+        "Anytime Touchdown": 0,
+        "Rushing Yards": 1,
+        "Passing Yards": 1
+    }
+
+    with col_line:
+        threshold_options = market_threshold_map.get(selected_market, [24.5, 39.5, 49.5])
+        selected_line = st.selectbox(
+            "Select Target Threshold Line", 
+            threshold_options, 
+            index=default_indices.get(selected_market, 0),
+            key=f"nfl_line_selector_{selected_market}"
+        )
+
+    slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="nfl_slate_date")
+
+    # 1. LIVE NFL SCHEDULE FETCH (ESPN API WITH CSV FALLBACK)
+    date_str = slate_date.strftime("%Y-%m-%d")
+    clean_date_num = date_str.replace("-", "")
+    schedule_pairs = []
+    schedule_map = {}
+    opponent_team_map = {}
+
     try:
-        odds = float(odds)
-        if odds > 0:
-            return 1.0 + (odds / 100.0)
-        elif odds < 0:
-            return 1.0 + (100.0 / abs(odds))
-        return 1.0
-    except (ValueError, TypeError):
-        return 1.0
+        url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={clean_date_num}"
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            s_data = res.json()
+            for ev in s_data.get("events", []):
+                for comp in ev.get("competitions", []):
+                    competitors = comp.get("competitors", [])
+                    away_obj = next((c for c in competitors if c.get("homeAway") == "away"), None)
+                    home_obj = next((c for c in competitors if c.get("homeAway") == "home"), None)
+                    if away_obj and home_obj:
+                        away = normalize_nfl_team(away_obj.get("team", {}).get("abbreviation"))
+                        home = normalize_nfl_team(home_obj.get("team", {}).get("abbreviation"))
+                        if away and home and (away, home) not in schedule_pairs:
+                            schedule_pairs.append((away, home))
+                            schedule_map[away] = f"@{home}"
+                            schedule_map[home] = f"vs {away}"
+                            opponent_team_map[away] = home
+                            opponent_team_map[home] = away
+    except Exception:
+        pass
 
-def decimal_to_american(dec):
-    if dec <= 1.0:
-        return "+100"
-    if dec >= 2.0:
-        val = int(round((dec - 1.0) * 100))
-        return f"+{val}"
+    # Fallback to schedule within CSV if ESPN API is unreachable
+    if not schedule_pairs and st.session_state["nfl_raw_pbp"] is not None:
+        df_sched = st.session_state["nfl_raw_pbp"]
+        if "game_date" in df_sched.columns:
+            date_matches = df_sched[df_sched["game_date"] == date_str]
+            for _, r in date_matches[["away_team", "home_team"]].drop_duplicates().iterrows():
+                away = normalize_nfl_team(r["away_team"])
+                home = normalize_nfl_team(r["home_team"])
+                if away and home and (away, home) not in schedule_pairs:
+                    schedule_pairs.append((away, home))
+                    schedule_map[away] = f"@{home}"
+                    schedule_map[home] = f"vs {away}"
+                    opponent_team_map[away] = home
+                    opponent_team_map[home] = away
+
+    # Render matrix if session state contains cached table
+    if st.session_state["nfl_raw_pbp"] is not None:
+        try:
+            df = st.session_state["nfl_raw_pbp"].copy()
+            df["posteam"] = df["posteam"].apply(normalize_nfl_team)
+            df["defteam"] = df["defteam"].apply(normalize_nfl_team)
+
+            # Team games count
+            team_game_counts = df.groupby("posteam")["game_id"].nunique().to_dict()
+
+            # ---------------------------------------------------------
+            # 2. DEFENSIVE MATCHUP WEIGHTING
+            # ---------------------------------------------------------
+            team_def_factors = {}
+            if selected_market in ["Receiving Yards", "Passing Yards"]:
+                def_stat = df[df["complete_pass"] == 1.0].groupby("defteam").agg(
+                    total_allowed=("passing_yards", "sum"),
+                    games=("game_id", "nunique")
+                ).reset_index()
+            elif selected_market == "Receptions":
+                def_stat = df[df["complete_pass"] == 1.0].groupby("defteam").agg(
+                    total_allowed=("complete_pass", "count"),
+                    games=("game_id", "nunique")
+                ).reset_index()
+            elif selected_market == "Rushing Yards":
+                def_stat = df[df["rushing_yards"].notna()].groupby("defteam").agg(
+                    total_allowed=("rushing_yards", "sum"),
+                    games=("game_id", "nunique")
+                ).reset_index()
+            else:  # Anytime Touchdown
+                def_stat = df[df["touchdown"] == 1.0].groupby("defteam").agg(
+                    total_allowed=("touchdown", "count"),
+                    games=("game_id", "nunique")
+                ).reset_index()
+
+            def_stat["rate"] = def_stat["total_allowed"] / def_stat["games"].replace(0, 1)
+            mean_rate = def_stat["rate"].mean() if not def_stat.empty else 1.0
+            def_stat["raw_factor"] = def_stat["rate"] / mean_rate
+
+            for _, r in def_stat.iterrows():
+                tm = r["defteam"]
+                raw_f = r["raw_factor"]
+                blended_f = ((1.0 - phase_weight) * 1.0) + (phase_weight * raw_f)
+                team_def_factors[tm] = round(blended_f, 4)
+
+            # ---------------------------------------------------------
+            # 3. SCHEDULE PILLS (PERSISTENT CLEAN MULTISELECT)
+            # ---------------------------------------------------------
+            game_pairs = []
+            game_labels_display = {}
+
+            for away, home in schedule_pairs:
+                clean_pair = f"{away} @ {home}"
+                game_pairs.append(clean_pair)
+
+                away_factor = team_def_factors.get(away, 1.0)
+                home_factor = team_def_factors.get(home, 1.0)
+                combo = round(away_factor + home_factor, 2)
+                icon = "🔥" if combo >= 2.10 else "⚡" if combo >= 2.00 else ""
+                game_labels_display[clean_pair] = f"{clean_pair} [{combo} {icon}]".strip()
+
+            sorted_clean_pairs = sorted(
+                game_pairs, 
+                key=lambda p: float(game_labels_display[p].split("[")[1].split()[0]), 
+                reverse=True
+            )
+
+            saved_key = f"nfl_saved_pairs_{date_str}"
+            init_flag_key = f"nfl_slate_init_{date_str}"
+            widget_key = f"nfl_pairs_widget_{date_str}"
+
+            if init_flag_key not in st.session_state:
+                st.session_state[saved_key] = sorted_clean_pairs
+                st.session_state[init_flag_key] = True
+
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state.get(saved_key, sorted_clean_pairs)
+
+            st.session_state[widget_key] = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
+
+            selected_matchups = st.multiselect(
+                "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
+                options=sorted_clean_pairs,
+                format_func=lambda x: game_labels_display.get(x, x),
+                key=widget_key
+            )
+            st.session_state[saved_key] = selected_matchups
+
+            # ---------------------------------------------------------
+            # 4. PLAYER EXTRACTION: MULTI-KEY GROUPING ['Player', 'Clean_Team']
+            # ---------------------------------------------------------
+            player_rows = []
+
+            if selected_market == "Receiving Yards":
+                rec_df = df[(df["complete_pass"] == 1.0) & df["receiver_player_name"].notna()]
+                grouped = rec_df.groupby(["receiver_player_name", "posteam"])
+                for (p_name, tm), g in grouped:
+                    n_games = team_game_counts.get(tm, 1)
+                    if n_games < min_gp: continue
+                    game_series = [g[g["game_id"] == gid]["receiving_yards"].sum() for gid in df[df["posteam"] == tm]["game_id"].unique()]
+                    avg_stat = round(sum(game_series) / n_games, 1)
+                    std_stat = max(float(np.std(game_series, ddof=1)) if len(game_series) > 1 else 15.0, 5.0)
+                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": std_stat, "GP": n_games})
+
+            elif selected_market == "Receptions":
+                rec_df = df[(df["complete_pass"] == 1.0) & df["receiver_player_name"].notna()]
+                grouped = rec_df.groupby(["receiver_player_name", "posteam"])
+                for (p_name, tm), g in grouped:
+                    n_games = team_game_counts.get(tm, 1)
+                    if n_games < min_gp: continue
+                    catches = len(g)
+                    avg_stat = round(catches / n_games, 1)
+                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": None, "GP": n_games})
+
+            elif selected_market == "Rushing Yards":
+                rush_df = df[df["rushing_yards"].notna() & df["rusher_player_name"].notna()]
+                grouped = rush_df.groupby(["rusher_player_name", "posteam"])
+                for (p_name, tm), g in grouped:
+                    n_games = team_game_counts.get(tm, 1)
+                    if n_games < min_gp: continue
+                    game_series = [g[g["game_id"] == gid]["rushing_yards"].sum() for gid in df[df["posteam"] == tm]["game_id"].unique()]
+                    avg_stat = round(sum(game_series) / n_games, 1)
+                    std_stat = max(float(np.std(game_series, ddof=1)) if len(game_series) > 1 else 15.0, 5.0)
+                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": std_stat, "GP": n_games})
+
+            elif selected_market == "Passing Yards":
+                pass_df = df[df["passing_yards"].notna() & df["passer_player_name"].notna()]
+                grouped = pass_df.groupby(["passer_player_name", "posteam"])
+                for (p_name, tm), g in grouped:
+                    n_games = team_game_counts.get(tm, 1)
+                    if n_games < min_gp: continue
+                    game_series = [g[g["game_id"] == gid]["passing_yards"].sum() for gid in df[df["posteam"] == tm]["game_id"].unique()]
+                    avg_stat = round(sum(game_series) / n_games, 1)
+                    std_stat = max(float(np.std(game_series, ddof=1)) if len(game_series) > 1 else 30.0, 10.0)
+                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": std_stat, "GP": n_games})
+
+            else:  # Anytime Touchdown
+                td_df = df[(df["touchdown"] == 1.0) & df["td_player_name"].notna()]
+                grouped = td_df.groupby(["td_player_name", "posteam"])
+                for (p_name, tm), g in grouped:
+                    n_games = team_game_counts.get(tm, 1)
+                    if n_games < min_gp: continue
+                    tds = len(g)
+                    avg_stat = round(tds / n_games, 2)
+                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": None, "GP": n_games})
+
+            merged = pd.DataFrame(player_rows)
+
+            if not merged.empty:
+                merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
+
+                def get_opp_factor(row):
+                    opp = opponent_team_map.get(row["Clean_Team"])
+                    if opp and opp in team_def_factors:
+                        return team_def_factors[opp]
+                    return 1.0
+
+                merged["Matchup_Factor"] = merged.apply(get_opp_factor, axis=1)
+                merged["Matchup_Proj"] = (merged["Current_Stat"] * merged["Matchup_Factor"]).round(1)
+
+                if not selected_matchups:
+                    st.info("🎯 Select one or more game matchups above to populate the matrix.")
+                else:
+                    active_teams = []
+                    for pair_str in selected_matchups:
+                        parts = pair_str.split(" @ ")
+                        if len(parts) == 2:
+                            active_teams.extend([parts[0].strip(), parts[1].strip()])
+
+                    merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
+
+                    # Exact distribution calculations: Normal for yardage, Poisson for counts
+                    def calc_model_prob(row, line):
+                        mu = row["Matchup_Proj"]
+                        if selected_market in ["Receiving Yards", "Rushing Yards", "Passing Yards"]:
+                            std_val = row.get("Std")
+                            if pd.isna(std_val) or std_val is None or std_val <= 0:
+                                std_val = max(mu * 0.4, 8.0)
+                            prob = (1.0 - norm.cdf(line, loc=mu, scale=std_val)) * 100.0
+                            return round(float(prob), 1)
+                        else:
+                            k = int(np.floor(line))
+                            prob = (1.0 - poisson.cdf(k, mu)) * 100.0
+                            return round(float(prob), 1)
+
+                    def prob_to_american(prob):
+                        if prob <= 0: return 9999
+                        if prob >= 100: return -9999
+                        p = prob / 100.0
+                        return int(round(- (p / (1.0 - p)) * 100)) if p >= 0.5 else int(round(((1.0 - p) / p) * 100))
+
+                    merged["Model_Over_Prob_%"] = merged.apply(lambda r: calc_model_prob(r, selected_line), axis=1)
+                    merged["Fair_American_Odds"] = merged["Model_Over_Prob_%"].apply(prob_to_american)
+                    merged["Market"] = selected_market
+                    merged["Line"] = selected_line
+
+                    merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
+
+                    st.markdown(f"### 📈 Slate Alt-Line Matrix ({selected_market} > {selected_line}):")
+
+                    display_cols = [
+                        "Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_Stat",
+                        "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"
+                    ]
+
+                    display_df = merged[display_cols].copy()
+                    display_df.insert(0, "Select", False)
+
+                    edited_df = st.data_editor(
+                        display_df,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+                        key=f"nfl_matrix_editor_{selected_market}_{selected_line}_{date_str}"
+                    )
+
+                    # ---------------------------------------------------------
+                    # 5. DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED TOP LEGS)
+                    # ---------------------------------------------------------
+                    col_add_btn, col_auto_btn = st.columns(2)
+
+                    with col_add_btn:
+                        if st.button("➕ Add Checked Players to Bet Slip", use_container_width=True):
+                            selected_rows = edited_df[edited_df["Select"] == True]
+                            if not selected_rows.empty:
+                                for _, row in selected_rows.iterrows():
+                                    new_item = {
+                                        "Include in Parlay": True,
+                                        "Sportsbook": "FanDuel",
+                                        "Player": row["Player"],
+                                        "Opponent": row["Opponent"],
+                                        "Market": row["Market"],
+                                        "Line": row["Line"],
+                                        "Nexus Odds (+/-)": None,
+                                        "Model Prob (%)": row["Model_Over_Prob_%"],
+                                        "Delete": False
+                                    }
+                                    if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nfl_bet_slip"]):
+                                        st.session_state["nfl_bet_slip"].append(new_item)
+                                st.success(f"Added {len(selected_rows)} checked players to Tab 1!")
+                            else:
+                                st.warning("Please check at least one player in the matrix first.")
+
+                    with col_auto_btn:
+                        if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
+                            scored_df = merged.copy()
+                            scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
+                            top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
+                            
+                            added_count = 0
+                            for _, row in top_candidates.iterrows():
+                                new_item = {
+                                    "Include in Parlay": True,
+                                    "Sportsbook": "FanDuel",
+                                    "Player": row["Player"],
+                                    "Opponent": row["Opponent"],
+                                    "Market": row["Market"],
+                                    "Line": row["Line"],
+                                    "Nexus Odds (+/-)": None,
+                                    "Model Prob (%)": row["Model_Over_Prob_%"],
+                                    "Delete": False
+                                }
+                                if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nfl_bet_slip"]):
+                                    st.session_state["nfl_bet_slip"].append(new_item)
+                                    added_count += 1
+                            st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
+
+            else:
+                st.info("No player data available for this market with current filters.")
+
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
     else:
-        val = int(round(-100 / (dec - 1.0)))
-        return f"{val}"
+        st.info("Please drop your pbp-2026.csv file above to populate the matrix.")
 
-# Initialize session state for bet slip and persistent data
-if "nfl_bet_slip" not in st.session_state:
-    st.session_state.nfl_bet_slip = []
-
-if "nfl_df" not in st.session_state:
-    st.session_state.nfl_df = None
-
-# Top Header
-st.title("🏈 NFL Quant Terminal: Production Suite")
-st.subheader("Multi-Market Accumulator, Schedule Pace Matchups, and Compound Parlay Generator")
-
-# Sidebar settings (keyed so they persist across page switches)
-with st.sidebar:
-    st.header("⚙️ NFL Model Settings")
-    st.caption("Active Slate: 2026 Week 7")
-    min_gp = st.slider("Minimum Player Games Played (GP)", min_value=1, max_value=6, value=3, key="nfl_min_gp")
-    profit_boost_pct = st.slider("Profit Boost (%)", min_value=0, max_value=100, value=30, step=5, key="nfl_profit_boost")
-    st.divider()
-    st.info("💡 Tip: Multi-select matchups in Tab 2 to isolate high-pace shootouts.")
-
-tab1, tab2 = st.tabs(["📑 Checked Slips & Nexus Odds Comparator", "📁 Slate Matrix & Projections"])
-
-# ==========================================
-# TAB 1: BET SLIP & LIVE EDGE EVALUATION
-# ==========================================
+# -------------------------------------------------------------
+# TAB 1: BET SLIP & ODDS COMPARATOR
+# -------------------------------------------------------------
 with tab1:
     st.subheader("📝 Checked Players & Nexus Odds Comparator")
-    st.caption("Type your Nexus Odds in the table. Real-time edges and compound parlay odds calculate live below.")
+    st.caption("Select your Sportsbook and enter Nexus Odds. Real-time edges calculate automatically once entered.")
 
-    col_btn, _ = st.columns([1, 5])
-    with col_btn:
-        if st.button("🗑️ Clear Bet Slip", use_container_width=True):
-            st.session_state.nfl_bet_slip = []
-            st.rerun()
+    if st.button("🗑️ Clear Bet Slip"):
+        st.session_state["nfl_bet_slip"] = []
+        st.rerun()
 
-    if not st.session_state.nfl_bet_slip:
-        st.info("💡 Instructions: Go to Tab 2, select your market and line, check your desired players, and click '➕ Add Checked Players to Bet Slip'.")
-    else:
-        slip_df = pd.DataFrame(st.session_state.nfl_bet_slip)
-
-        # Ensure all columns exist
-        if "Include in Parlay" not in slip_df.columns:
-            slip_df.insert(0, "Include in Parlay", True)
-        if "Sportsbook" not in slip_df.columns:
-            slip_df.insert(1, "Sportsbook", "FanDuel")
-        if "Nexus Odds (+/-)" not in slip_df.columns:
-            slip_df["Nexus Odds (+/-)"] = None
-        if "Delete" not in slip_df.columns:
-            slip_df["Delete"] = False
-
-        column_config = {
-            "Include in Parlay": st.column_config.CheckboxColumn("Include in Parlay", default=True),
-            "Sportsbook": st.column_config.SelectboxColumn(
-                "Sportsbook",
-                options=["FanDuel", "DraftKings", "BetMGM", "Bet365", "BetRivers", "ESPN BET", "Pinnacle"],
-                default="FanDuel",
-                required=True
-            ),
-            "Player": st.column_config.TextColumn("Player", disabled=True),
-            "Opponent": st.column_config.TextColumn("Opponent", disabled=True),
-            "Market": st.column_config.TextColumn("Market", disabled=True),
-            "Line": st.column_config.NumberColumn("Line", disabled=True),
-            "Nexus Odds (+/-)": st.column_config.NumberColumn("Nexus Odds (+/-)", step=5),
-            "Model Prob (%)": st.column_config.TextColumn("Model Prob (%)", disabled=True),
-            "Delete": st.column_config.CheckboxColumn("Delete", default=False)
-        }
-
-        cols_order = [
-            "Include in Parlay", "Sportsbook", "Player", "Opponent", 
-            "Market", "Line", "Nexus Odds (+/-)", "Model Prob (%)", "Delete"
-        ]
-        slip_df = slip_df[[c for c in cols_order if c in slip_df.columns]]
-
+    if st.session_state["nfl_bet_slip"]:
+        slip_df = pd.DataFrame(st.session_state["nfl_bet_slip"])
+        
         edited_slip = st.data_editor(
             slip_df,
-            column_config=column_config,
+            hide_index=True,
             use_container_width=True,
-            hide_index=False,
+            column_config={
+                "Include in Parlay": st.column_config.CheckboxColumn(),
+                "Sportsbook": st.column_config.SelectboxColumn(
+                    "Sportsbook",
+                    help="Select sportsbook offering this price",
+                    options=[
+                        "FanDuel",
+                        "bet365",
+                        "DraftKings",
+                        "theScore Bet",
+                        "BetMGM",
+                        "BetRivers"
+                    ],
+                    required=True
+                ),
+                "Nexus Odds (+/-)": st.column_config.NumberColumn(
+                    "Nexus Odds (+/-)",
+                    help="Type American odds (e.g. -115 or +125)"
+                ),
+                "Delete": st.column_config.CheckboxColumn()
+            },
             key="nfl_slip_editor"
         )
 
-        # Handle row deletions
         if edited_slip["Delete"].any():
-            st.session_state.nfl_bet_slip = edited_slip[~edited_slip["Delete"]].to_dict('records')
+            st.session_state["nfl_bet_slip"] = edited_slip[~edited_slip["Delete"]].to_dict(orient="records")
             st.rerun()
 
-        st.session_state.nfl_bet_slip = edited_slip.to_dict('records')
+        st.session_state["nfl_bet_slip"] = edited_slip.to_dict(orient="records")
 
-        # Live Edge Evaluation (only for rows where Odds are provided)
-        eval_rows = []
-        parlay_true_prob = 1.0
-        parlay_dec_odds = 1.0
-        has_parlay_legs = False
+        # Live Edge Evaluation
+        st.markdown("### 📈 Live Edge Evaluation:")
+        edge_data = []
 
-        for idx, row in edited_slip.iterrows():
-            odds_val = row.get("Nexus Odds (+/-)")
-            if pd.notna(odds_val) and str(odds_val).strip() != "" and odds_val is not None:
-                try:
-                    user_odds = float(odds_val)
-                    dec_odds = american_to_decimal(user_odds)
-                    implied_prob = 1.0 / dec_odds
-                    
-                    prob_str = str(row["Model Prob (%)"]).replace("%", "")
-                    model_prob = float(prob_str) / 100.0
-                    
-                    edge_pct = (model_prob - implied_prob) * 100.0
-                    
-                    eval_rows.append({
-                        "Sportsbook": row["Sportsbook"],
-                        "Player": row["Player"],
-                        "Opponent": row["Opponent"],
-                        "Market": row["Market"],
-                        "Line": row["Line"],
-                        "Odds": f"+{int(user_odds)}" if user_odds > 0 else f"{int(user_odds)}",
-                        "Model Prob": f"{round(model_prob * 100, 1)}%",
-                        "Edge %": f"{'+' if edge_pct > 0 else ''}{round(edge_pct, 1)}%"
-                    })
-                    
-                    if row.get("Include in Parlay", True):
-                        parlay_true_prob *= model_prob
-                        parlay_dec_odds *= dec_odds
-                        has_parlay_legs = True
-                except (ValueError, TypeError):
-                    continue
-
-        if eval_rows:
-            st.subheader("📈 Live Edge Evaluation:")
-            eval_df = pd.DataFrame(eval_rows)
-            st.dataframe(eval_df, use_container_width=True)
-
-        if has_parlay_legs:
-            st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
-            boost_mult = 1.0 + (profit_boost_pct / 100.0)
-            boosted_dec = 1.0 + ((parlay_dec_odds - 1.0) * boost_mult)
-            
-            raw_parlay_american = decimal_to_american(parlay_dec_odds)
-            boosted_american = decimal_to_american(boosted_dec)
-            
-            implied_boosted_prob = 1.0 / boosted_dec
-            compound_edge = (parlay_true_prob - implied_boosted_prob) * 100.0
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Checked Parlay Odds", raw_parlay_american)
-            c2.metric(f"Boosted (+{profit_boost_pct}%)", boosted_american)
-            c3.metric("Model Slip True Prob", f"{round(parlay_true_prob * 100, 1)}%")
-            c4.metric("Compound Slip Edge", f"{'+' if compound_edge > 0 else ''}{round(compound_edge, 1)}%")
-
-
-# ==========================================
-# TAB 2: SLATE MATRIX & PROJECTIONS
-# ==========================================
-with tab2:
-    st.subheader("Single Dropzone: NFL Play-by-Play Processor")
-    uploaded_file = st.file_uploader("Drop your pbp-2026.csv file here", type=["csv"], key="nfl_pbp_uploader")
-
-    @st.cache_data
-    def load_pbp_data(file):
-        return pd.read_csv(file, low_memory=False)
-
-    if uploaded_file is not None:
-        st.session_state.nfl_df = load_pbp_data(uploaded_file)
-
-    if st.session_state.nfl_df is not None:
-        try:
-            df = st.session_state.nfl_df
-            baselines = compute_nfl_team_baselines(df)
-            
-            col_mkt, col_line = st.columns(2)
-            with col_mkt:
-                target_market = st.selectbox(
-                    "Select Target Prop Market",
-                    ["Passing Yards", "Rushing Yards", "Receiving Yards", "Receptions", "Anytime Touchdown Scorer"]
-                )
-            
-            with col_line:
-                if target_market == "Passing Yards":
-                    default_lines = [199.5, 224.5, 249.5, 274.5, 299.5]
-                elif target_market in ["Rushing Yards", "Receiving Yards"]:
-                    default_lines = [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 99.5]
-                elif target_market == "Receptions":
-                    default_lines = [2.5, 3.5, 4.5, 5.5, 6.5, 7.5]
+        def american_to_implied(odds):
+            try:
+                odds = float(odds)
+                if odds > 0:
+                    return 100.0 / (odds + 100.0)
                 else:
-                    default_lines = [0.5]
-                target_line = st.selectbox("Select Target Threshold Line", default_lines, index=min(1, len(default_lines)-1))
+                    return abs(odds) / (abs(odds) + 100.0)
+            except:
+                return None
 
-            st.date_input("Target Slate Date", value=date(2026, 10, 25))
+        parlay_mult = 1.0
+        parlay_prob = 1.0
+        active_legs = 0
 
-            # Matchup badges
-            all_matchups = calculate_matchup_factors_for_slate(WEEK_7_SCHEDULE, baselines)
-            matchup_options = [f"{m['matchup']} [{m['combined_factor']}{' 🔥' if m['is_fire'] else ''}]" for m in all_matchups]
+        for row in st.session_state["nfl_bet_slip"]:
+            odds_val = row.get("Nexus Odds (+/-)")
+            prob = row.get("Model Prob (%)", 50.0)
             
-            selected_badge_strings = st.multiselect(
-                "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
-                options=matchup_options,
-                default=matchup_options
-            )
-            
-            selected_matchups = []
-            for m in all_matchups:
-                badge_str = f"{m['matchup']} [{m['combined_factor']}{' 🔥' if m['is_fire'] else ''}]"
-                if badge_str in selected_badge_strings:
-                    selected_matchups.append(m)
+            if odds_val is not None and pd.notna(odds_val) and str(odds_val).strip() not in ["", "None"]:
+                implied = american_to_implied(odds_val)
+                if implied is not None:
+                    implied_pct = implied * 100.0
+                    edge = round(prob - implied_pct, 1)
+                    edge_str = f"+{edge}%" if edge > 0 else f"{edge}%"
+                    odds_display = f"+{int(odds_val)}" if float(odds_val) > 0 else f"{int(odds_val)}"
 
-            matrix_df = process_nfl_player_matrix(
-                df, baselines, selected_matchups, target_market, target_line, min_gp=min_gp
-            )
+                    edge_data.append({
+                        "Sportsbook": row.get("Sportsbook", "FanDuel"),
+                        "Player": row.get("Player", ""),
+                        "Opponent": row.get("Opponent", ""),
+                        "Market": row.get("Market", "Receiving Yards"),
+                        "Line": row.get("Line", 24.5),
+                        "Odds": odds_display,
+                        "Model Prob": f"{prob}%",
+                        "Edge %": edge_str
+                    })
 
-            if not matrix_df.empty:
-                st.subheader(f"📈 Slate Alt-Line Matrix ({target_market} > {target_line}):")
-                matrix_df.insert(0, "Select", False)
+                    if row.get("Include in Parlay", True):
+                        active_legs += 1
+                        o = float(odds_val)
+                        mult = (o / 100.0 + 1.0) if o > 0 else (100.0 / abs(o) + 1.0)
+                        parlay_mult *= mult
+                        parlay_prob *= (prob / 100.0)
 
-                grid_cfg = {
-                    "Select": st.column_config.CheckboxColumn("Select", default=False),
-                    "Baseline_Stat": st.column_config.NumberColumn(format="%.1f"),
-                    "Current_Stat": st.column_config.NumberColumn(format="%.1f"),
-                    "Matchup_Factor": st.column_config.NumberColumn(format="%.4f"),
-                    "Matchup_Proj": st.column_config.NumberColumn(format="%.1f"),
-                    "Model_Over_Prob_%": st.column_config.NumberColumn(format="%.1f%%"),
-                    "Fair_American_Odds": st.column_config.NumberColumn()
-                }
+        if edge_data:
+            st.dataframe(pd.DataFrame(edge_data), hide_index=True, use_container_width=True)
+        else:
+            st.info("Enter odds in the table above to calculate edges for your checked players.")
 
-                edited_matrix = st.data_editor(
-                    matrix_df,
-                    column_config=grid_cfg,
-                    use_container_width=True,
-                    hide_index=True,
-                    key=f"nfl_matrix_{target_market}_{target_line}"
-                )
+        # Live Compound Slip Calculator
+        st.markdown("### 🚀 Live Compound Slip & Profit Boost Calculator")
+        c1, c2, c3, c4 = st.columns(4)
 
-                col_add, col_auto = st.columns([1, 1])
-                with col_add:
-                    if st.button("➕ Add Checked Players to Bet Slip", use_container_width=True):
-                        checked_rows = edited_matrix[edited_matrix["Select"] == True]
-                        if not checked_rows.empty:
-                            for _, r in checked_rows.iterrows():
-                                st.session_state.nfl_bet_slip.append({
-                                    "Include in Parlay": True,
-                                    "Sportsbook": "FanDuel",
-                                    "Player": r["Player"],
-                                    "Opponent": r["Opponent"],
-                                    "Market": r["Market"],
-                                    "Line": r["Line"],
-                                    "Nexus Odds (+/-)": None,
-                                    "Model Prob (%)": f"{r['Model_Over_Prob_%']}%",
-                                    "Delete": False
-                                })
-                            st.success(f"Added {len(checked_rows)} player(s) to Tab 1!")
-                            st.rerun()
-
-                with col_auto:
-                    if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                        temp_df = edited_matrix.copy()
-
-                        # Edge score: Model Probability amplified by defensive Matchup Factor strength
-                        temp_df["Weighted_Score"] = temp_df["Model_Over_Prob_%"] * (temp_df["Matchup_Factor"] ** 2.5)
-
-                        # Sweet spot filter: Target high-edge, optimal parlay probability band (60% to 88%)
-                        sweet_spot_df = temp_df[(temp_df["Model_Over_Prob_%"] >= 60.0) & (temp_df["Model_Over_Prob_%"] <= 88.0)]
-
-                        # Fall back to full table if 1 or 2 isolated games have fewer than 5 players in the sweet spot
-                        candidate_pool = sweet_spot_df if len(sweet_spot_df) >= 5 else temp_df
-
-                        top5 = candidate_pool.sort_values(by="Weighted_Score", ascending=False).head(5)
-
-                        for _, r in top5.iterrows():
-                            st.session_state.nfl_bet_slip.append({
-                                "Include in Parlay": True,
-                                "Sportsbook": "FanDuel",
-                                "Player": r["Player"],
-                                "Opponent": r["Opponent"],
-                                "Market": r["Market"],
-                                "Line": r["Line"],
-                                "Nexus Odds (+/-)": None,
-                                "Model Prob (%)": f"{r['Model_Over_Prob_%']}%",
-                                "Delete": False
-                            })
-                        st.success(f"Auto-loaded Top {len(top5)} matchup-weighted sweet-spot legs to Tab 1!")
-                        st.rerun()
+        if active_legs > 0:
+            if parlay_mult >= 2.0:
+                calc_parlay_odds = int(round((parlay_mult - 1.0) * 100))
+                calc_parlay_str = f"+{calc_parlay_odds}"
             else:
-                st.warning("No qualifying players found for current filters.")
-        except Exception as e:
-            st.error(f"Error processing play-by-play file: {e}")
+                calc_parlay_odds = int(round(-100.0 / (parlay_mult - 1.0))) if parlay_mult > 1.0 else 100
+                calc_parlay_str = f"{calc_parlay_odds}"
+
+            boost_dec = (parlay_mult - 1.0) * (1.0 + profit_boost / 100.0) + 1.0
+            boost_odds = int(round((boost_dec - 1.0) * 100)) if boost_dec >= 2.0 else int(round(-100.0 / (boost_dec - 1.0)))
+            boost_str = f"+{boost_odds}" if boost_odds > 0 else f"{boost_odds}"
+
+            true_prob_pct = round(parlay_prob * 100.0, 1)
+            implied_base = (1.0 / parlay_mult) * 100.0
+            compound_edge = round(true_prob_pct - implied_base, 1)
+
+            c1.metric("Checked Parlay Odds", calc_parlay_str)
+            c2.metric(f"Boosted (+{profit_boost}%)", boost_str)
+            c3.metric("Model Slip True Prob", f"{true_prob_pct}%")
+            c4.metric("Compound Slip Edge", f"+{compound_edge}%" if compound_edge > 0 else f"{compound_edge}%")
+        else:
+            c1.metric("Checked Parlay Odds", "Enter Odds")
+            c2.metric("Boosted", "Enter Odds")
+            c3.metric("Model Slip True Prob", "0.0%")
+            c4.metric("Compound Slip Edge", "0.0%")
     else:
-        st.info("Awaiting pbp-2026.csv upload to compute baselines and render slate projections.")
+        st.info("Your bet slip is currently empty. Check players in Tab 2 to evaluate edges.")
