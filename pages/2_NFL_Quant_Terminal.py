@@ -16,48 +16,45 @@ st.markdown("Play-by-play data processing, schedule pace adjustments, matchup da
 if "nfl_bet_slip" not in st.session_state:
     st.session_state["nfl_bet_slip"] = []
 
-if "nfl_sample_weight" not in st.session_state:
-    st.session_state["nfl_sample_weight"] = 50
+if "nfl_profit_boost" not in st.session_state:
+    st.session_state["nfl_profit_boost"] = 30
 
 if "nfl_min_gp" not in st.session_state:
     st.session_state["nfl_min_gp"] = 2
 
-if "nfl_profit_boost" not in st.session_state:
-    st.session_state["nfl_profit_boost"] = 30
+if "nfl_cached_tables" not in st.session_state:
+    st.session_state["nfl_cached_tables"] = None
 
-if "nfl_raw_pbp" not in st.session_state:
-    st.session_state["nfl_raw_pbp"] = None
+if "nfl_file_signature" not in st.session_state:
+    st.session_state["nfl_file_signature"] = None
+
+# Hardcoded model dampening (50% league baseline 1.0, 50% opponent rate)
+PHASE_WEIGHT = 0.50
 
 # -------------------------------------------------------------
-# SIDEBAR CONFIGURATION
+# SIDEBAR CONFIGURATION (STREAMLINED & MINIMAL)
 # -------------------------------------------------------------
-st.sidebar.header("🏈 NFL Model Settings")
-
-phase_weight = st.sidebar.slider(
-    "Defensive Matchup Weight (%)", 
-    min_value=0, 
-    max_value=100, 
-    step=5,
-    key="nfl_sample_weight",
-    help="Blends raw opponent defensive allowances with league-average baseline (1.0)."
-) / 100.0
-
+st.sidebar.header("🏈 NFL Filters")
 min_gp = st.sidebar.slider(
     "Minimum Games Played Filter",
     min_value=1,
     max_value=10,
+    value=st.session_state["nfl_min_gp"],
     step=1,
-    key="nfl_min_gp"
+    key="nfl_min_gp",
+    help="Filters out players with fewer games played."
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 Market-Tailored Edge Filters")
+st.sidebar.header("🎯 Odds & Slip Filters")
 profit_boost = st.sidebar.number_input(
     "Active Sportsbook Profit Boost (%)", 
     min_value=0, 
     max_value=100, 
+    value=st.session_state["nfl_profit_boost"],
     step=5,
-    key="nfl_profit_boost"
+    key="nfl_profit_boost",
+    help="Applied to compound parlays in Tab 1."
 )
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
@@ -122,12 +119,111 @@ with tab2:
         key="nfl_uploader"
     )
 
+    # FAST ONE-TIME PRE-COMPUTATION CACHE
     if uploaded_file is not None:
-        try:
-            uploaded_file.seek(0)
-            st.session_state["nfl_raw_pbp"] = pd.read_csv(uploaded_file, low_memory=False)
-        except Exception as ue:
-            st.error(f"Error reading pbp file: {str(ue)}")
+        file_sig = f"{uploaded_file.name}_{uploaded_file.size}"
+        if st.session_state.get("nfl_file_signature") != file_sig:
+            with st.spinner("Processing play-by-play data..."):
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, low_memory=False)
+                df["posteam"] = df["posteam"].apply(normalize_nfl_team)
+                df["defteam"] = df["defteam"].apply(normalize_nfl_team)
+
+                team_game_counts = df.groupby("posteam")["game_id"].nunique().to_dict()
+
+                cached = {}
+                # 1. Calculate All Defensive Factors with 50/50 Dampening
+                def_factors = {}
+                markets_list = ["Receiving Yards", "Receptions", "Anytime Touchdown", "Rushing Yards", "Passing Yards"]
+                for m in markets_list:
+                    if m in ["Receiving Yards", "Passing Yards"]:
+                        d_stat = df[df["complete_pass"] == 1.0].groupby("defteam").agg(tot=("passing_yards", "sum"), g=("game_id", "nunique")).reset_index()
+                    elif m == "Receptions":
+                        d_stat = df[df["complete_pass"] == 1.0].groupby("defteam").agg(tot=("complete_pass", "count"), g=("game_id", "nunique")).reset_index()
+                    elif m == "Rushing Yards":
+                        d_stat = df[df["rushing_yards"].notna()].groupby("defteam").agg(tot=("rushing_yards", "sum"), g=("game_id", "nunique")).reset_index()
+                    else:
+                        d_stat = df[df["touchdown"] == 1.0].groupby("defteam").agg(tot=("touchdown", "count"), g=("game_id", "nunique")).reset_index()
+                    
+                    d_stat["rate"] = d_stat["tot"] / d_stat["g"].replace(0, 1)
+                    m_mean = d_stat["rate"].mean() if not d_stat.empty else 1.0
+                    d_stat["raw_f"] = d_stat["rate"] / m_mean
+                    def_map = {}
+                    for _, r in d_stat.iterrows():
+                        def_map[r["defteam"]] = round(((1.0 - PHASE_WEIGHT) * 1.0) + (PHASE_WEIGHT * r["raw_f"]), 4)
+                    def_factors[m] = def_map
+
+                cached["def_factors"] = def_factors
+
+                # 2. Vectorized Player Extraction Grouped by (Player, Clean_Team)
+                # Receiving Yards
+                rec_df = df[(df["complete_pass"] == 1.0) & df["receiver_player_name"].notna()]
+                p_game_rec = rec_df.groupby(["receiver_player_name", "posteam", "game_id"])["receiving_yards"].sum().reset_index()
+                m_rec_yds = p_game_rec.groupby(["receiver_player_name", "posteam"]).agg(
+                    tot_stat=("receiving_yards", "sum"),
+                    std_stat=("receiving_yards", "std")
+                ).reset_index().rename(columns={"receiver_player_name": "Player", "posteam": "Clean_Team"})
+                m_rec_yds["GP"] = m_rec_yds["Clean_Team"].map(team_game_counts).fillna(1)
+                m_rec_yds["Baseline_Stat"] = (m_rec_yds["tot_stat"] / m_rec_yds["GP"]).round(1)
+                m_rec_yds["Current_Stat"] = m_rec_yds["Baseline_Stat"]
+                m_rec_yds["Std"] = m_rec_yds["std_stat"].fillna(15.0).clip(lower=5.0).round(1)
+                cached["Receiving Yards"] = m_rec_yds
+
+                # Receptions
+                m_rec = rec_df.groupby(["receiver_player_name", "posteam"]).agg(
+                    tot_stat=("complete_pass", "count")
+                ).reset_index().rename(columns={"receiver_player_name": "Player", "posteam": "Clean_Team"})
+                m_rec["GP"] = m_rec["Clean_Team"].map(team_game_counts).fillna(1)
+                m_rec["Baseline_Stat"] = (m_rec["tot_stat"] / m_rec["GP"]).round(1)
+                m_rec["Current_Stat"] = m_rec["Baseline_Stat"]
+                m_rec["Std"] = None
+                cached["Receptions"] = m_rec
+
+                # Rushing Yards
+                rush_df = df[df["rushing_yards"].notna() & df["rusher_player_name"].notna()]
+                p_game_rush = rush_df.groupby(["rusher_player_name", "posteam", "game_id"])["rushing_yards"].sum().reset_index()
+                m_rush = p_game_rush.groupby(["rusher_player_name", "posteam"]).agg(
+                    tot_stat=("rushing_yards", "sum"),
+                    std_stat=("rushing_yards", "std")
+                ).reset_index().rename(columns={"rusher_player_name": "Player", "posteam": "Clean_Team"})
+                m_rush["GP"] = m_rush["Clean_Team"].map(team_game_counts).fillna(1)
+                m_rush["Baseline_Stat"] = (m_rush["tot_stat"] / m_rush["GP"]).round(1)
+                m_rush["Current_Stat"] = m_rush["Baseline_Stat"]
+                m_rush["Std"] = m_rush["std_stat"].fillna(15.0).clip(lower=5.0).round(1)
+                cached["Rushing Yards"] = m_rush
+
+                # Passing Yards
+                pass_df = df[df["passing_yards"].notna() & df["passer_player_name"].notna()]
+                p_game_pass = pass_df.groupby(["passer_player_name", "posteam", "game_id"])["passing_yards"].sum().reset_index()
+                m_pass = p_game_pass.groupby(["passer_player_name", "posteam"]).agg(
+                    tot_stat=("passing_yards", "sum"),
+                    std_stat=("passing_yards", "std")
+                ).reset_index().rename(columns={"passer_player_name": "Player", "posteam": "Clean_Team"})
+                m_pass["GP"] = m_pass["Clean_Team"].map(team_game_counts).fillna(1)
+                m_pass["Baseline_Stat"] = (m_pass["tot_stat"] / m_pass["GP"]).round(1)
+                m_pass["Current_Stat"] = m_pass["Baseline_Stat"]
+                m_pass["Std"] = m_pass["std_stat"].fillna(30.0).clip(lower=10.0).round(1)
+                cached["Passing Yards"] = m_pass
+
+                # Anytime Touchdown
+                td_df = df[(df["touchdown"] == 1.0) & df["td_player_name"].notna()]
+                m_td = td_df.groupby(["td_player_name", "posteam"]).agg(
+                    tot_stat=("touchdown", "count")
+                ).reset_index().rename(columns={"td_player_name": "Player", "posteam": "Clean_Team"})
+                m_td["GP"] = m_td["Clean_Team"].map(team_game_counts).fillna(1)
+                m_td["Baseline_Stat"] = (m_td["tot_stat"] / m_td["GP"]).round(2)
+                m_td["Current_Stat"] = m_td["Baseline_Stat"]
+                m_td["Std"] = None
+                cached["Anytime Touchdown"] = m_td
+
+                # Schedule fallback from CSV
+                if "game_date" in df.columns:
+                    cached["csv_schedule"] = df[["game_date", "away_team", "home_team"]].drop_duplicates()
+                else:
+                    cached["csv_schedule"] = pd.DataFrame()
+
+                st.session_state["nfl_cached_tables"] = cached
+                st.session_state["nfl_file_signature"] = file_sig
 
     col_market, col_line = st.columns([1, 1])
     with col_market:
@@ -163,7 +259,7 @@ with tab2:
 
     slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="nfl_slate_date")
 
-    # 1. LIVE NFL SCHEDULE FETCH (ESPN API WITH CSV FALLBACK)
+    # 1. LIVE SCHEDULE RESOLUTION
     date_str = slate_date.strftime("%Y-%m-%d")
     clean_date_num = date_str.replace("-", "")
     schedule_pairs = []
@@ -172,7 +268,7 @@ with tab2:
 
     try:
         url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={clean_date_num}"
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=4)
         if res.status_code == 200:
             s_data = res.json()
             for ev in s_data.get("events", []):
@@ -192,12 +288,12 @@ with tab2:
     except Exception:
         pass
 
-    # Fallback to schedule within CSV if ESPN API is unreachable
-    if not schedule_pairs and st.session_state["nfl_raw_pbp"] is not None:
-        df_sched = st.session_state["nfl_raw_pbp"]
-        if "game_date" in df_sched.columns:
-            date_matches = df_sched[df_sched["game_date"] == date_str]
-            for _, r in date_matches[["away_team", "home_team"]].drop_duplicates().iterrows():
+    # Schedule fallback from cached CSV
+    if not schedule_pairs and st.session_state["nfl_cached_tables"] is not None:
+        csv_sched = st.session_state["nfl_cached_tables"].get("csv_schedule", pd.DataFrame())
+        if not csv_sched.empty and "game_date" in csv_sched.columns:
+            matches = csv_sched[csv_sched["game_date"] == date_str]
+            for _, r in matches.iterrows():
                 away = normalize_nfl_team(r["away_team"])
                 home = normalize_nfl_team(r["home_team"])
                 if away and home and (away, home) not in schedule_pairs:
@@ -207,53 +303,19 @@ with tab2:
                     opponent_team_map[away] = home
                     opponent_team_map[home] = away
 
-    # Render matrix if session state contains cached table
-    if st.session_state["nfl_raw_pbp"] is not None:
+    # INSTANT MATRIX POPULATION
+    if st.session_state["nfl_cached_tables"] is not None:
         try:
-            df = st.session_state["nfl_raw_pbp"].copy()
-            df["posteam"] = df["posteam"].apply(normalize_nfl_team)
-            df["defteam"] = df["defteam"].apply(normalize_nfl_team)
+            cached = st.session_state["nfl_cached_tables"]
+            team_def_factors = cached["def_factors"].get(selected_market, {})
+            merged = cached.get(selected_market, pd.DataFrame()).copy()
 
-            # Team games count
-            team_game_counts = df.groupby("posteam")["game_id"].nunique().to_dict()
-
-            # ---------------------------------------------------------
-            # 2. DEFENSIVE MATCHUP WEIGHTING
-            # ---------------------------------------------------------
-            team_def_factors = {}
-            if selected_market in ["Receiving Yards", "Passing Yards"]:
-                def_stat = df[df["complete_pass"] == 1.0].groupby("defteam").agg(
-                    total_allowed=("passing_yards", "sum"),
-                    games=("game_id", "nunique")
-                ).reset_index()
-            elif selected_market == "Receptions":
-                def_stat = df[df["complete_pass"] == 1.0].groupby("defteam").agg(
-                    total_allowed=("complete_pass", "count"),
-                    games=("game_id", "nunique")
-                ).reset_index()
-            elif selected_market == "Rushing Yards":
-                def_stat = df[df["rushing_yards"].notna()].groupby("defteam").agg(
-                    total_allowed=("rushing_yards", "sum"),
-                    games=("game_id", "nunique")
-                ).reset_index()
-            else:  # Anytime Touchdown
-                def_stat = df[df["touchdown"] == 1.0].groupby("defteam").agg(
-                    total_allowed=("touchdown", "count"),
-                    games=("game_id", "nunique")
-                ).reset_index()
-
-            def_stat["rate"] = def_stat["total_allowed"] / def_stat["games"].replace(0, 1)
-            mean_rate = def_stat["rate"].mean() if not def_stat.empty else 1.0
-            def_stat["raw_factor"] = def_stat["rate"] / mean_rate
-
-            for _, r in def_stat.iterrows():
-                tm = r["defteam"]
-                raw_f = r["raw_factor"]
-                blended_f = ((1.0 - phase_weight) * 1.0) + (phase_weight * raw_f)
-                team_def_factors[tm] = round(blended_f, 4)
+            # Filter by Min Games Played from sidebar
+            if not merged.empty:
+                merged = merged[merged["GP"] >= min_gp].copy()
 
             # ---------------------------------------------------------
-            # 3. SCHEDULE PILLS (PERSISTENT CLEAN MULTISELECT)
+            # 3. SCHEDULE PILLS WITH COMBINED MATCHUP FACTOR
             # ---------------------------------------------------------
             game_pairs = []
             game_labels_display = {}
@@ -288,72 +350,12 @@ with tab2:
             st.session_state[widget_key] = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
 
             selected_matchups = st.multiselect(
-                "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
+                "🎯 Filter Specific Game Matchups (Sorted by Combined Matchup Factor)",
                 options=sorted_clean_pairs,
                 format_func=lambda x: game_labels_display.get(x, x),
                 key=widget_key
             )
             st.session_state[saved_key] = selected_matchups
-
-            # ---------------------------------------------------------
-            # 4. PLAYER EXTRACTION: MULTI-KEY GROUPING ['Player', 'Clean_Team']
-            # ---------------------------------------------------------
-            player_rows = []
-
-            if selected_market == "Receiving Yards":
-                rec_df = df[(df["complete_pass"] == 1.0) & df["receiver_player_name"].notna()]
-                grouped = rec_df.groupby(["receiver_player_name", "posteam"])
-                for (p_name, tm), g in grouped:
-                    n_games = team_game_counts.get(tm, 1)
-                    if n_games < min_gp: continue
-                    game_series = [g[g["game_id"] == gid]["receiving_yards"].sum() for gid in df[df["posteam"] == tm]["game_id"].unique()]
-                    avg_stat = round(sum(game_series) / n_games, 1)
-                    std_stat = max(float(np.std(game_series, ddof=1)) if len(game_series) > 1 else 15.0, 5.0)
-                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": std_stat, "GP": n_games})
-
-            elif selected_market == "Receptions":
-                rec_df = df[(df["complete_pass"] == 1.0) & df["receiver_player_name"].notna()]
-                grouped = rec_df.groupby(["receiver_player_name", "posteam"])
-                for (p_name, tm), g in grouped:
-                    n_games = team_game_counts.get(tm, 1)
-                    if n_games < min_gp: continue
-                    catches = len(g)
-                    avg_stat = round(catches / n_games, 1)
-                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": None, "GP": n_games})
-
-            elif selected_market == "Rushing Yards":
-                rush_df = df[df["rushing_yards"].notna() & df["rusher_player_name"].notna()]
-                grouped = rush_df.groupby(["rusher_player_name", "posteam"])
-                for (p_name, tm), g in grouped:
-                    n_games = team_game_counts.get(tm, 1)
-                    if n_games < min_gp: continue
-                    game_series = [g[g["game_id"] == gid]["rushing_yards"].sum() for gid in df[df["posteam"] == tm]["game_id"].unique()]
-                    avg_stat = round(sum(game_series) / n_games, 1)
-                    std_stat = max(float(np.std(game_series, ddof=1)) if len(game_series) > 1 else 15.0, 5.0)
-                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": std_stat, "GP": n_games})
-
-            elif selected_market == "Passing Yards":
-                pass_df = df[df["passing_yards"].notna() & df["passer_player_name"].notna()]
-                grouped = pass_df.groupby(["passer_player_name", "posteam"])
-                for (p_name, tm), g in grouped:
-                    n_games = team_game_counts.get(tm, 1)
-                    if n_games < min_gp: continue
-                    game_series = [g[g["game_id"] == gid]["passing_yards"].sum() for gid in df[df["posteam"] == tm]["game_id"].unique()]
-                    avg_stat = round(sum(game_series) / n_games, 1)
-                    std_stat = max(float(np.std(game_series, ddof=1)) if len(game_series) > 1 else 30.0, 10.0)
-                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": std_stat, "GP": n_games})
-
-            else:  # Anytime Touchdown
-                td_df = df[(df["touchdown"] == 1.0) & df["td_player_name"].notna()]
-                grouped = td_df.groupby(["td_player_name", "posteam"])
-                for (p_name, tm), g in grouped:
-                    n_games = team_game_counts.get(tm, 1)
-                    if n_games < min_gp: continue
-                    tds = len(g)
-                    avg_stat = round(tds / n_games, 2)
-                    player_rows.append({"Player": p_name, "Clean_Team": tm, "Baseline_Stat": avg_stat, "Current_Stat": avg_stat, "Std": None, "GP": n_games})
-
-            merged = pd.DataFrame(player_rows)
 
             if not merged.empty:
                 merged["Opponent"] = merged["Clean_Team"].map(schedule_map).fillna("@OPP")
@@ -423,9 +425,7 @@ with tab2:
                         key=f"nfl_matrix_editor_{selected_market}_{selected_line}_{date_str}"
                     )
 
-                    # ---------------------------------------------------------
-                    # 5. DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED TOP LEGS)
-                    # ---------------------------------------------------------
+                    # Action Buttons
                     col_add_btn, col_auto_btn = st.columns(2)
 
                     with col_add_btn:
@@ -451,12 +451,12 @@ with tab2:
                                 st.warning("Please check at least one player in the matrix first.")
 
                     with col_auto_btn:
+                        added_count = 0
                         if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
                             scored_df = merged.copy()
                             scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
                             top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
                             
-                            added_count = 0
                             for _, row in top_candidates.iterrows():
                                 new_item = {
                                     "Include in Parlay": True,
@@ -475,10 +475,10 @@ with tab2:
                             st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
 
             else:
-                st.info("No player data available for this market with current filters.")
+                st.info("No player data available for this market.")
 
         except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
+            st.error(f"Error processing matrix: {str(e)}")
     else:
         st.info("Please drop your pbp-2026.csv file above to populate the matrix.")
 
