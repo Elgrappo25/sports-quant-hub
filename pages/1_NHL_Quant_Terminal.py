@@ -16,7 +16,7 @@ if "nhl_bet_slip" not in st.session_state:
     st.session_state["nhl_bet_slip"] = []
 
 if "nhl_sample_weight" not in st.session_state:
-    st.session_state["nhl_sample_weight"] = 40  # Defaults securely to Phase 2 (40%)
+    st.session_state["nhl_sample_weight"] = 40  # Default to Phase 2 (40%)
 
 if "nhl_min_gp" not in st.session_state:
     st.session_state["nhl_min_gp"] = 3
@@ -148,7 +148,6 @@ with tab2:
             else:
                 player_files.append(f)
 
-        # Cache player dataframes
         if player_files:
             p_dfs = [read_clean(f) for f in player_files]
             for p_df in p_dfs:
@@ -157,7 +156,6 @@ with tab2:
                 else:
                     st.session_state["nhl_raw_p_curr"] = p_df
 
-        # Cache team dataframes
         if team_files:
             t_dfs = [read_clean(f) for f in team_files]
             for t_df in t_dfs:
@@ -292,11 +290,12 @@ with tab2:
                 reverse=True
             )
 
+            # Keyed by market AND date to guarantee date-switches auto-load that slate's matchups
             selected_matchups = st.multiselect(
                 "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
                 options=sorted_labels,
                 default=sorted_labels,
-                key=f"nhl_matchups_{selected_market}"
+                key=f"nhl_matchups_{selected_market}_{date_str}"
             )
 
             # ---------------------------------------------------------
@@ -365,13 +364,18 @@ with tab2:
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
+            # STRICT SLATE FILTER: Only display teams playing in selected matchups on today's schedule
+            active_teams = []
             if selected_matchups:
-                active_teams = []
                 for label in selected_matchups:
                     meta = game_options_dict.get(label)
                     if meta:
                         active_teams.extend([meta["away"], meta["home"]])
-                merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
+            else:
+                for away, home in schedule_pairs:
+                    active_teams.extend([away, home])
+
+            merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
             def calc_over_prob(mu, line):
                 k = int(np.floor(line))
@@ -405,7 +409,7 @@ with tab2:
                 hide_index=True,
                 use_container_width=True,
                 column_config={"Select": st.column_config.CheckboxColumn(required=True)},
-                key=f"nhl_matrix_editor_{selected_market}_{selected_line}"
+                key=f"nhl_matrix_editor_{selected_market}_{selected_line}_{date_str}"
             )
 
             # ---------------------------------------------------------
