@@ -166,7 +166,6 @@ with tab2:
         df.columns = df.columns.str.strip()
         return df
 
-    # Ingest newly dropped files into persistent session state
     if uploaded_files and len(uploaded_files) >= 2:
         player_files = []
         team_files = []
@@ -177,7 +176,6 @@ with tab2:
             else:
                 player_files.append(f)
 
-        # 1. Player files: Prior baseline is larger (700-900+ rows) vs early-season (500-600 rows)
         if len(player_files) >= 2:
             p_dfs = [read_clean(f) for f in player_files]
             p_dfs_sorted = sorted(p_dfs, key=lambda d: len(d), reverse=True)
@@ -190,7 +188,6 @@ with tab2:
             else:
                 st.session_state["nhl_raw_p_curr"] = p_df
 
-        # 2. Team files: Differentiate by filename keywords ('25-26') or file size
         if len(team_files) >= 2:
             t0 = read_clean(team_files[0])
             t1 = read_clean(team_files[1])
@@ -321,7 +318,7 @@ with tab2:
                     st.warning(f"Team defense note: {str(te)}")
 
             # ---------------------------------------------------------
-            # 3. SCHEDULE PILLS (PERSISTENT & CLEAN MULTISELECT)
+            # 3. SCHEDULE PILLS (PERSISTENT & CLEARABLE MULTISELECT)
             # ---------------------------------------------------------
             game_pairs = []
             game_labels_display = {}
@@ -342,28 +339,16 @@ with tab2:
                 reverse=True
             )
 
-            # Persist clean pairs in session state and sanitize any legacy bracketed strings
-            state_pairs_key = f"nhl_active_pairs_{date_str}"
-            if state_pairs_key not in st.session_state:
-                st.session_state[state_pairs_key] = sorted_clean_pairs
-            else:
-                cleaned_existing = []
-                for item in st.session_state[state_pairs_key]:
-                    clean_item = item.split(" [")[0].strip()
-                    if clean_item in sorted_clean_pairs:
-                        cleaned_existing.append(clean_item)
-                st.session_state[state_pairs_key] = cleaned_existing if cleaned_existing else sorted_clean_pairs
-
-            # Widget key strictly manages user selections
+            # Initialize once per date with the full slate
+            init_flag_key = f"nhl_slate_init_{date_str}"
             widget_key = f"nhl_pairs_widget_{date_str}"
-            if widget_key not in st.session_state:
-                st.session_state[widget_key] = st.session_state[state_pairs_key]
 
-            # Re-sanitize widget selection to match valid sorted clean pairs
-            sanitized_selection = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
-            if not sanitized_selection and sorted_clean_pairs:
-                sanitized_selection = sorted_clean_pairs
-            st.session_state[widget_key] = sanitized_selection
+            if init_flag_key not in st.session_state:
+                st.session_state[widget_key] = sorted_clean_pairs
+                st.session_state[init_flag_key] = True
+
+            # Sanitize current selection without re-filling if deliberately emptied by the user
+            st.session_state[widget_key] = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
 
             selected_matchups = st.multiselect(
                 "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
@@ -371,7 +356,6 @@ with tab2:
                 format_func=lambda x: game_labels_display.get(x, x),
                 key=widget_key
             )
-            st.session_state[state_pairs_key] = selected_matchups
 
             # ---------------------------------------------------------
             # 4. SKATER STATS: MARKET EXTRACTION & BLENDING
@@ -439,61 +423,88 @@ with tab2:
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # STRICT SLATE FILTER: Only display skaters from selected active matchups
-            active_teams = []
-            target_selection = selected_matchups if selected_matchups else sorted_clean_pairs
-            for pair_str in target_selection:
-                parts = pair_str.split(" @ ")
-                if len(parts) == 2:
-                    active_teams.extend([parts[0].strip(), parts[1].strip()])
+            # STRICT SLATE FILTER: If the user cleared the slate, show an informative empty state
+            if not selected_matchups:
+                st.info("🎯 Select one or more game matchups above to populate the matrix.")
+            else:
+                active_teams = []
+                for pair_str in selected_matchups:
+                    parts = pair_str.split(" @ ")
+                    if len(parts) == 2:
+                        active_teams.extend([parts[0].strip(), parts[1].strip()])
 
-            merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
+                merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
-            def calc_over_prob(mu, line):
-                k = int(np.floor(line))
-                return round((1.0 - poisson.cdf(k, mu)) * 100, 1)
+                def calc_over_prob(mu, line):
+                    k = int(np.floor(line))
+                    return round((1.0 - poisson.cdf(k, mu)) * 100, 1)
 
-            def prob_to_american(prob):
-                if prob <= 0: return 9999
-                if prob >= 100: return -9999
-                p = prob / 100.0
-                return int(round(- (p / (1.0 - p)) * 100)) if p >= 0.5 else int(round(((1.0 - p) / p) * 100))
+                def prob_to_american(prob):
+                    if prob <= 0: return 9999
+                    if prob >= 100: return -9999
+                    p = prob / 100.0
+                    return int(round(- (p / (1.0 - p)) * 100)) if p >= 0.5 else int(round(((1.0 - p) / p) * 100))
 
-            merged["Model_Over_Prob_%"] = merged["Matchup_Proj"].apply(lambda x: calc_over_prob(x, selected_line))
-            merged["Fair_American_Odds"] = merged["Model_Over_Prob_%"].apply(prob_to_american)
-            merged["Market"] = selected_market
-            merged["Line"] = selected_line
+                merged["Model_Over_Prob_%"] = merged["Matchup_Proj"].apply(lambda x: calc_over_prob(x, selected_line))
+                merged["Fair_American_Odds"] = merged["Model_Over_Prob_%"].apply(prob_to_american)
+                merged["Market"] = selected_market
+                merged["Line"] = selected_line
 
-            merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
+                merged = merged.sort_values(by="Matchup_Proj", ascending=False).reset_index(drop=True)
 
-            st.markdown(f"### 📈 Slate Alt-Line Matrix ({selected_market} > {selected_line}):")
+                st.markdown(f"### 📈 Slate Alt-Line Matrix ({selected_market} > {selected_line}):")
 
-            display_cols = [
-                "Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_Stat",
-                "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"
-            ]
+                display_cols = [
+                    "Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_Stat",
+                    "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"
+                ]
 
-            display_df = merged[display_cols].copy()
-            display_df.insert(0, "Select", False)
+                display_df = merged[display_cols].copy()
+                display_df.insert(0, "Select", False)
 
-            edited_df = st.data_editor(
-                display_df,
-                hide_index=True,
-                use_container_width=True,
-                column_config={"Select": st.column_config.CheckboxColumn(required=True)},
-                key=f"nhl_matrix_editor_{selected_market}_{selected_line}_{date_str}"
-            )
+                edited_df = st.data_editor(
+                    display_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+                    key=f"nhl_matrix_editor_{selected_market}_{selected_line}_{date_str}"
+                )
 
-            # ---------------------------------------------------------
-            # 5. DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED TOP MATCHUPS)
-            # ---------------------------------------------------------
-            col_add_btn, col_auto_btn = st.columns(2)
+                # ---------------------------------------------------------
+                # 5. DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED TOP MATCHUPS)
+                # ---------------------------------------------------------
+                col_add_btn, col_auto_btn = st.columns(2)
 
-            with col_add_btn:
-                if st.button("➕ Add Checked Players to Bet Slip", use_container_width=True):
-                    selected_rows = edited_df[edited_df["Select"] == True]
-                    if not selected_rows.empty:
-                        for _, row in selected_rows.iterrows():
+                with col_add_btn:
+                    if st.button("➕ Add Checked Players to Bet Slip", use_container_width=True):
+                        selected_rows = edited_df[edited_df["Select"] == True]
+                        if not selected_rows.empty:
+                            for _, row in selected_rows.iterrows():
+                                new_item = {
+                                    "Include in Parlay": True,
+                                    "Sportsbook": "FanDuel",
+                                    "Player": row["Player"],
+                                    "Opponent": row["Opponent"],
+                                    "Market": row["Market"],
+                                    "Line": row["Line"],
+                                    "Nexus Odds (+/-)": None,
+                                    "Model Prob (%)": row["Model_Over_Prob_%"],
+                                    "Delete": False
+                                }
+                                if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
+                                    st.session_state["nhl_bet_slip"].append(new_item)
+                            st.success(f"Added {len(selected_rows)} checked players to Tab 1!")
+                        else:
+                            st.warning("Please check at least one player in the matrix first.")
+
+                with col_auto_btn:
+                    if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
+                        scored_df = merged.copy()
+                        scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
+                        top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
+                        
+                        added_count = 0
+                        for _, row in top_candidates.iterrows():
                             new_item = {
                                 "Include in Parlay": True,
                                 "Sportsbook": "FanDuel",
@@ -507,33 +518,8 @@ with tab2:
                             }
                             if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
                                 st.session_state["nhl_bet_slip"].append(new_item)
-                        st.success(f"Added {len(selected_rows)} checked players to Tab 1!")
-                    else:
-                        st.warning("Please check at least one player in the matrix first.")
-
-            with col_auto_btn:
-                if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                    scored_df = merged.copy()
-                    scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
-                    top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
-                    
-                    added_count = 0
-                    for _, row in top_candidates.iterrows():
-                        new_item = {
-                            "Include in Parlay": True,
-                            "Sportsbook": "FanDuel",
-                            "Player": row["Player"],
-                            "Opponent": row["Opponent"],
-                            "Market": row["Market"],
-                            "Line": row["Line"],
-                            "Nexus Odds (+/-)": None,
-                            "Model Prob (%)": row["Model_Over_Prob_%"],
-                            "Delete": False
-                        }
-                        if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
-                            st.session_state["nhl_bet_slip"].append(new_item)
-                            added_count += 1
-                    st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
+                                added_count += 1
+                        st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
 
         except Exception as e:
             st.error(f"Error processing files: {str(e)}")
