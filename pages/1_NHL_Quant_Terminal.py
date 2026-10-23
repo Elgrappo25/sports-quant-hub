@@ -78,7 +78,7 @@ def normalize_team(raw_name):
     if not raw_name or pd.isna(raw_name):
         return "NHL"
     cleaned = str(raw_name).strip().upper()
-    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)  # Strips dots (e.g. ST. -> ST)
+    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)  # Strips periods & symbols (ST. -> ST)
 
     if "LOUIS" in cleaned or cleaned in ["STL", "ST LOUIS", "BLUES"]:
         return "STL"
@@ -177,21 +177,39 @@ with tab2:
             else:
                 player_files.append(f)
 
-        if player_files:
+        # 1. Player files: Prior baseline is larger (700-900+ rows) vs early-season (500-600 rows)
+        if len(player_files) >= 2:
             p_dfs = [read_clean(f) for f in player_files]
-            for p_df in p_dfs:
-                if "shots/60" in [c.lower() for c in p_df.columns]:
-                    st.session_state["nhl_raw_p_base"] = p_df
-                else:
-                    st.session_state["nhl_raw_p_curr"] = p_df
+            p_dfs_sorted = sorted(p_dfs, key=lambda d: len(d), reverse=True)
+            st.session_state["nhl_raw_p_base"] = p_dfs_sorted[0]
+            st.session_state["nhl_raw_p_curr"] = p_dfs_sorted[1]
+        elif len(player_files) == 1:
+            p_df = read_clean(player_files[0])
+            if "25-26" in player_files[0].name:
+                st.session_state["nhl_raw_p_base"] = p_df
+            else:
+                st.session_state["nhl_raw_p_curr"] = p_df
 
-        if team_files:
-            t_dfs = [read_clean(f) for f in team_files]
-            for t_df in t_dfs:
-                if "sa/60" in [c.lower() for c in t_df.columns]:
-                    st.session_state["nhl_raw_t_base"] = t_df
-                else:
-                    st.session_state["nhl_raw_t_curr"] = t_df
+        # 2. Team files: Differentiate by filename keywords ('25-26') or file size
+        if len(team_files) >= 2:
+            t0 = read_clean(team_files[0])
+            t1 = read_clean(team_files[1])
+            if "25-26" in team_files[0].name.lower():
+                st.session_state["nhl_raw_t_base"] = t0
+                st.session_state["nhl_raw_t_curr"] = t1
+            elif "25-26" in team_files[1].name.lower():
+                st.session_state["nhl_raw_t_base"] = t1
+                st.session_state["nhl_raw_t_curr"] = t0
+            else:
+                t_dfs_sorted = sorted([t0, t1], key=lambda d: len(d), reverse=True)
+                st.session_state["nhl_raw_t_base"] = t_dfs_sorted[0]
+                st.session_state["nhl_raw_t_curr"] = t_dfs_sorted[1]
+        elif len(team_files) == 1:
+            t_df = read_clean(team_files[0])
+            if "25-26" in team_files[0].name.lower():
+                st.session_state["nhl_raw_t_base"] = t_df
+            else:
+                st.session_state["nhl_raw_t_curr"] = t_df
 
     col_market, col_line = st.columns([1, 1])
     with col_market:
@@ -271,6 +289,11 @@ with tab2:
                         col = next((c for c in df_t_base.columns if c.lower() == base_metric_col or c.lower() in ["sa/60", "ca/60"]), None)
                         if col and pd.notna(r[col]):
                             rates_base[tm] = float(r[col])
+                        else:
+                            val = pd.to_numeric(r.get(curr_metric_col, r.get("SA", 0)), errors="coerce")
+                            toi_val = pd.to_numeric(r.get("TOI", 60), errors="coerce")
+                            if pd.notna(val) and pd.notna(toi_val) and toi_val > 0:
+                                rates_base[tm] = (val / (toi_val / 60.0))
 
                     rates_curr = {}
                     for _, r in df_t_curr.iterrows():
@@ -298,7 +321,7 @@ with tab2:
                     st.warning(f"Team defense note: {str(te)}")
 
             # ---------------------------------------------------------
-            # 3. SCHEDULE PILLS (PERSISTENT CLEAN SELECTION ACROSS MARKETS)
+            # 3. SCHEDULE PILLS (PERSISTENT SELECTION ACROSS PROP MARKETS)
             # ---------------------------------------------------------
             game_pairs = []
             game_labels_display = {}
