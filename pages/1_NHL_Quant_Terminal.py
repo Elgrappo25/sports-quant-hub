@@ -339,7 +339,6 @@ with tab2:
                 reverse=True
             )
 
-            # Robust storage keys that survive date switching
             saved_key = f"nhl_saved_pairs_{date_str}"
             init_flag_key = f"nhl_slate_init_{date_str}"
             widget_key = f"nhl_pairs_widget_{date_str}"
@@ -348,11 +347,9 @@ with tab2:
                 st.session_state[saved_key] = sorted_clean_pairs
                 st.session_state[init_flag_key] = True
 
-            # If the widget key was purged by Streamlit during a date toggle, restore it cleanly from saved_key
             if widget_key not in st.session_state:
                 st.session_state[widget_key] = st.session_state.get(saved_key, sorted_clean_pairs)
 
-            # Sanitize current selection against valid slate pairs
             st.session_state[widget_key] = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
 
             selected_matchups = st.multiselect(
@@ -361,7 +358,6 @@ with tab2:
                 format_func=lambda x: game_labels_display.get(x, x),
                 key=widget_key
             )
-            # Sync user's latest selection back to the non-purged storage key
             st.session_state[saved_key] = selected_matchups
 
             # ---------------------------------------------------------
@@ -430,7 +426,7 @@ with tab2:
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # STRICT SLATE FILTER: If the user cleared the slate, show an informative empty state
+            # STRICT SLATE FILTER: If cleared, show clean prompt without error
             if not selected_matchups:
                 st.info("🎯 Select one or more game matchups above to populate the matrix.")
             else:
@@ -478,7 +474,7 @@ with tab2:
                 )
 
                 # ---------------------------------------------------------
-                # 5. DUAL ACTION BUTTONS (ADD CHECKED & AUTO-FEED TOP MATCHUPS)
+                # 5. DUAL ACTION BUTTONS (SAFE VARIABLE SCOPING)
                 # ---------------------------------------------------------
                 col_add_btn, col_auto_btn = st.columns(2)
 
@@ -505,12 +501,12 @@ with tab2:
                             st.warning("Please check at least one player in the matrix first.")
 
                 with col_auto_btn:
+                    added_count = 0
                     if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
                         scored_df = merged.copy()
                         scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
                         top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
                         
-                        added_count = 0
                         for _, row in top_candidates.iterrows():
                             new_item = {
                                 "Include in Parlay": True,
@@ -526,7 +522,7 @@ with tab2:
                             if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
                                 st.session_state["nhl_bet_slip"].append(new_item)
                                 added_count += 1
-                    st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
+                        st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
 
         except Exception as e:
             st.error(f"Error processing files: {str(e)}")
