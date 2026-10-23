@@ -78,7 +78,7 @@ def normalize_team(raw_name):
     if not raw_name or pd.isna(raw_name):
         return "NHL"
     cleaned = str(raw_name).strip().upper()
-    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)  # Strips periods & symbols (ST. -> ST)
+    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)
 
     if "LOUIS" in cleaned or cleaned in ["STL", "ST LOUIS", "BLUES"]:
         return "STL"
@@ -321,7 +321,7 @@ with tab2:
                     st.warning(f"Team defense note: {str(te)}")
 
             # ---------------------------------------------------------
-            # 3. SCHEDULE PILLS (PERSISTENT SELECTION ACROSS PROP MARKETS)
+            # 3. SCHEDULE PILLS (PERSISTENT & CLEAN MULTISELECT)
             # ---------------------------------------------------------
             game_pairs = []
             game_labels_display = {}
@@ -342,16 +342,34 @@ with tab2:
                 reverse=True
             )
 
+            # Persist clean pairs in session state and sanitize any legacy bracketed strings
             state_pairs_key = f"nhl_active_pairs_{date_str}"
             if state_pairs_key not in st.session_state:
                 st.session_state[state_pairs_key] = sorted_clean_pairs
+            else:
+                cleaned_existing = []
+                for item in st.session_state[state_pairs_key]:
+                    clean_item = item.split(" [")[0].strip()
+                    if clean_item in sorted_clean_pairs:
+                        cleaned_existing.append(clean_item)
+                st.session_state[state_pairs_key] = cleaned_existing if cleaned_existing else sorted_clean_pairs
+
+            # Widget key strictly manages user selections
+            widget_key = f"nhl_pairs_widget_{date_str}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state[state_pairs_key]
+
+            # Re-sanitize widget selection to match valid sorted clean pairs
+            sanitized_selection = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
+            if not sanitized_selection and sorted_clean_pairs:
+                sanitized_selection = sorted_clean_pairs
+            st.session_state[widget_key] = sanitized_selection
 
             selected_matchups = st.multiselect(
                 "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
                 options=sorted_clean_pairs,
-                default=st.session_state[state_pairs_key],
                 format_func=lambda x: game_labels_display.get(x, x),
-                key=f"nhl_pill_widget_{date_str}"
+                key=widget_key
             )
             st.session_state[state_pairs_key] = selected_matchups
 
