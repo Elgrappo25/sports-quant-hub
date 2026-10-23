@@ -78,7 +78,7 @@ def normalize_team(raw_name):
     if not raw_name or pd.isna(raw_name):
         return "NHL"
     cleaned = str(raw_name).strip().upper()
-    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)  # Strips periods (e.g. ST. -> ST)
+    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)  # Strips dots (e.g. ST. -> ST)
 
     if "LOUIS" in cleaned or cleaned in ["STL", "ST LOUIS", "BLUES"]:
         return "STL"
@@ -298,38 +298,39 @@ with tab2:
                     st.warning(f"Team defense note: {str(te)}")
 
             # ---------------------------------------------------------
-            # 3. SCHEDULE PILLS (PERSISTENT SELECTION ACROSS MARKETS)
+            # 3. SCHEDULE PILLS (PERSISTENT CLEAN SELECTION ACROSS MARKETS)
             # ---------------------------------------------------------
-            game_options_dict = {}
+            game_pairs = []
+            game_labels_display = {}
+
             for away, home in schedule_pairs:
+                clean_pair = f"{away} @ {home}"
+                game_pairs.append(clean_pair)
+
                 away_factor = team_def_factors.get(away, 1.0)
                 home_factor = team_def_factors.get(home, 1.0)
                 combo = round(away_factor + home_factor, 2)
                 icon = "🔥" if combo >= 2.05 else "⚡" if combo >= 1.95 else ""
-                label = f"{away} @ {home} [{combo} {icon}]".strip()
-                game_options_dict[label] = {
-                    "pair": f"{away}@{home}",
-                    "away": away,
-                    "home": home,
-                    "factor": combo
-                }
+                game_labels_display[clean_pair] = f"{clean_pair} [{combo} {icon}]".strip()
 
-            sorted_labels = sorted(
-                game_options_dict.keys(), 
-                key=lambda x: game_options_dict[x]["factor"], 
+            sorted_clean_pairs = sorted(
+                game_pairs, 
+                key=lambda p: float(game_labels_display[p].split("[")[1].split()[0]), 
                 reverse=True
             )
 
-            # Persist filtered game pairs across market changes
-            pair_to_label = {meta["pair"]: lbl for lbl, meta in game_options_dict.items()}
-            
-            # Key tied ONLY to date so changing prop market NEVER wipes your game filter!
+            state_pairs_key = f"nhl_active_pairs_{date_str}"
+            if state_pairs_key not in st.session_state:
+                st.session_state[state_pairs_key] = sorted_clean_pairs
+
             selected_matchups = st.multiselect(
                 "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
-                options=sorted_labels,
-                default=sorted_labels,
-                key=f"nhl_active_matchups_{date_str}"
+                options=sorted_clean_pairs,
+                default=st.session_state[state_pairs_key],
+                format_func=lambda x: game_labels_display.get(x, x),
+                key=f"nhl_pill_widget_{date_str}"
             )
+            st.session_state[state_pairs_key] = selected_matchups
 
             # ---------------------------------------------------------
             # 4. SKATER STATS: MARKET EXTRACTION & BLENDING
@@ -399,14 +400,11 @@ with tab2:
 
             # STRICT SLATE FILTER: Only display skaters from selected active matchups
             active_teams = []
-            if selected_matchups:
-                for label in selected_matchups:
-                    meta = game_options_dict.get(label)
-                    if meta:
-                        active_teams.extend([meta["away"], meta["home"]])
-            else:
-                for away, home in schedule_pairs:
-                    active_teams.extend([away, home])
+            target_selection = selected_matchups if selected_matchups else sorted_clean_pairs
+            for pair_str in target_selection:
+                parts = pair_str.split(" @ ")
+                if len(parts) == 2:
+                    active_teams.extend([parts[0].strip(), parts[1].strip()])
 
             merged = merged[merged["Clean_Team"].isin(active_teams)].copy()
 
