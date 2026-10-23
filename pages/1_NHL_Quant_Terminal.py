@@ -339,15 +339,20 @@ with tab2:
                 reverse=True
             )
 
-            # Initialize once per date with the full slate
+            # Robust storage keys that survive date switching
+            saved_key = f"nhl_saved_pairs_{date_str}"
             init_flag_key = f"nhl_slate_init_{date_str}"
             widget_key = f"nhl_pairs_widget_{date_str}"
 
             if init_flag_key not in st.session_state:
-                st.session_state[widget_key] = sorted_clean_pairs
+                st.session_state[saved_key] = sorted_clean_pairs
                 st.session_state[init_flag_key] = True
 
-            # Sanitize current selection without re-filling if deliberately emptied by the user
+            # If the widget key was purged by Streamlit during a date toggle, restore it cleanly from saved_key
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state.get(saved_key, sorted_clean_pairs)
+
+            # Sanitize current selection against valid slate pairs
             st.session_state[widget_key] = [p for p in st.session_state[widget_key] if p in sorted_clean_pairs]
 
             selected_matchups = st.multiselect(
@@ -356,6 +361,8 @@ with tab2:
                 format_func=lambda x: game_labels_display.get(x, x),
                 key=widget_key
             )
+            # Sync user's latest selection back to the non-purged storage key
+            st.session_state[saved_key] = selected_matchups
 
             # ---------------------------------------------------------
             # 4. SKATER STATS: MARKET EXTRACTION & BLENDING
@@ -519,7 +526,7 @@ with tab2:
                             if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
                                 st.session_state["nhl_bet_slip"].append(new_item)
                                 added_count += 1
-                        st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
+                    st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
 
         except Exception as e:
             st.error(f"Error processing files: {str(e)}")
