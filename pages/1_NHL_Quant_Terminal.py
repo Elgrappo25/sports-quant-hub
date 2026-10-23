@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import re
 from scipy.stats import poisson
 
 st.set_page_config(page_title="NHL Quant Terminal", page_icon="🏒", layout="wide")
@@ -16,7 +17,7 @@ if "nhl_bet_slip" not in st.session_state:
     st.session_state["nhl_bet_slip"] = []
 
 if "nhl_sample_weight" not in st.session_state:
-    st.session_state["nhl_sample_weight"] = 40  # Default to Phase 2 (40%)
+    st.session_state["nhl_sample_weight"] = 40  # Phase 2 (40%)
 
 if "nhl_min_gp" not in st.session_state:
     st.session_state["nhl_min_gp"] = 3
@@ -70,53 +71,81 @@ profit_boost = st.sidebar.number_input(
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
-# Comprehensive Universal Team Mapping
-NHL_TEAM_DICT = {
-    "ANA": ["ANA", "ANAHEIM", "DUCKS", "ANAHEIM DUCKS"],
-    "BOS": ["BOS", "BOSTON", "BRUINS", "BOSTON BRUINS"],
-    "BUF": ["BUF", "BUFFALO", "SABRES", "BUFFALO SABRES"],
-    "CAR": ["CAR", "CAROLINA", "HURRICANES", "CAROLINA HURRICANES"],
-    "CBJ": ["CBJ", "COLUMBUS", "BLUE JACKETS", "COLUMBUS BLUE JACKETS"],
-    "CGY": ["CGY", "CALGARY", "FLAMES", "CALGARY FLAMES"],
-    "CHI": ["CHI", "CHICAGO", "BLACKHAWKS", "CHICAGO BLACKHAWKS"],
-    "COL": ["COL", "COLORADO", "AVALANCHE", "COLORADO AVALANCHE"],
-    "DAL": ["DAL", "DALLAS", "STARS", "DALLAS STARS"],
-    "DET": ["DET", "DETROIT", "RED WINGS", "DETROIT RED WINGS"],
-    "EDM": ["EDM", "EDMONTON", "OILERS", "EDMONTON OILERS"],
-    "FLA": ["FLA", "FLORIDA", "PANTHERS", "FLORIDA PANTHERS"],
-    "LAK": ["LAK", "L.A", "LOS ANGELES", "KINGS", "LOS ANGELES KINGS", "LA"],
-    "MIN": ["MIN", "MINNESOTA", "WILD", "MINNESOTA WILD"],
-    "MTL": ["MTL", "MON", "MONTREAL", "CANADIENS", "MONTREAL CANADIENS"],
-    "NJD": ["NJD", "N.J", "NEW JERSEY", "DEVILS", "NEW JERSEY DEVILS", "NJ"],
-    "NSH": ["NSH", "NASHVILLE", "PREDATORS", "NASHVILLE PREDATORS"],
-    "NYI": ["NYI", "NEW YORK ISLANDERS", "ISLANDERS", "NY ISLANDERS"],
-    "NYR": ["NYR", "NEW YORK RANGERS", "RANGERS", "NY RANGERS"],
-    "OTT": ["OTT", "OTTAWA", "SENATORS", "OTTAWA SENATORS"],
-    "PHI": ["PHI", "PHILADELPHIA", "FLYERS", "PHILADELPHIA FLYERS"],
-    "PIT": ["PIT", "PITTSBURGH", "PENGUINS", "PITTSBURGH PENGUINS"],
-    "SEA": ["SEA", "SEATTLE", "KRAKEN", "SEATTLE KRAKEN"],
-    "SJS": ["SJS", "S.J", "SAN JOSE", "SHARKS", "SAN JOSE SHARKS", "SJ"],
-    "STL": ["STL", "ST. LOUIS", "ST LOUIS", "BLUES", "ST. LOUIS BLUES"],
-    "TBL": ["TBL", "T.B", "TAMPA BAY", "LIGHTNING", "TAMPA BAY LIGHTNING", "TB"],
-    "TOR": ["TOR", "TORONTO", "MAPLE LEAFS", "TORONTO MAPLE LEAFS"],
-    "UTA": ["UTA", "UTAH", "UTAH HOCKEY CLUB", "UTAH HC", "ARI", "ARIZONA", "COYOTES"],
-    "VAN": ["VAN", "VANCOUVER", "CANUCKS", "VANCOUVER CANUCKS"],
-    "VGK": ["VGK", "VEG", "VEGAS", "GOLDEN KNIGHTS", "VEGAS GOLDEN KNIGHTS"],
-    "WPG": ["WPG", "WINNIPEG", "JETS", "WINNIPEG JETS"],
-    "WSH": ["WSH", "WAS", "WASHINGTON", "CAPITALS", "WASHINGTON CAPITALS"]
-}
-
-CLEAN_TEAM_LOOKUP = {}
-for code, aliases in NHL_TEAM_DICT.items():
-    CLEAN_TEAM_LOOKUP[code.upper()] = code
-    for alias in aliases:
-        CLEAN_TEAM_LOOKUP[alias.upper()] = code
-
+# -------------------------------------------------------------
+# ROBUST TEAM NORMALIZER (HANDLES PERIODS, DOTS & NICKNAMES)
+# -------------------------------------------------------------
 def normalize_team(raw_name):
     if not raw_name or pd.isna(raw_name):
         return "NHL"
     cleaned = str(raw_name).strip().upper()
-    return CLEAN_TEAM_LOOKUP.get(cleaned, cleaned[:3])
+    cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)  # Strips periods (e.g. ST. -> ST)
+
+    if "LOUIS" in cleaned or cleaned in ["STL", "ST LOUIS", "BLUES"]:
+        return "STL"
+    if "VEGAS" in cleaned or cleaned in ["VGK", "VEG", "GOLDEN KNIGHTS"]:
+        return "VGK"
+    if "TAMPA" in cleaned or cleaned in ["TBL", "TB", "LIGHTNING"]:
+        return "TBL"
+    if "FLORIDA" in cleaned or cleaned in ["FLA", "PANTHERS"]:
+        return "FLA"
+    if "SAN JOSE" in cleaned or cleaned in ["SJS", "SJ", "SHARKS"]:
+        return "SJS"
+    if "NEW JERSEY" in cleaned or cleaned in ["NJD", "NJ", "DEVILS"]:
+        return "NJD"
+    if "ISLANDERS" in cleaned or cleaned in ["NYI"]:
+        return "NYI"
+    if "RANGERS" in cleaned or cleaned in ["NYR"]:
+        return "NYR"
+    if "LOS ANGELES" in cleaned or cleaned in ["LAK", "LA", "KINGS"]:
+        return "LAK"
+    if "TORONTO" in cleaned or cleaned in ["TOR", "MAPLE LEAFS"]:
+        return "TOR"
+    if "MONTREAL" in cleaned or cleaned in ["MTL", "MON", "CANADIENS"]:
+        return "MTL"
+    if "OTTAWA" in cleaned or cleaned in ["OTT", "SENATORS"]:
+        return "OTT"
+    if "EDMONTON" in cleaned or cleaned in ["EDM", "OILERS"]:
+        return "EDM"
+    if "CALGARY" in cleaned or cleaned in ["CGY", "FLAMES"]:
+        return "CGY"
+    if "VANCOUVER" in cleaned or cleaned in ["VAN", "CANUCKS"]:
+        return "VAN"
+    if "WINNIPEG" in cleaned or cleaned in ["WPG", "JETS"]:
+        return "WPG"
+    if "COLORADO" in cleaned or cleaned in ["COL", "AVALANCHE"]:
+        return "COL"
+    if "DALLAS" in cleaned or cleaned in ["DAL", "STARS"]:
+        return "DAL"
+    if "BOSTON" in cleaned or cleaned in ["BOS", "BRUINS"]:
+        return "BOS"
+    if "CAROLINA" in cleaned or cleaned in ["CAR", "HURRICANES"]:
+        return "CAR"
+    if "CHICAGO" in cleaned or cleaned in ["CHI", "BLACKHAWKS"]:
+        return "CHI"
+    if "DETROIT" in cleaned or cleaned in ["DET", "RED WINGS"]:
+        return "DET"
+    if "MINNESOTA" in cleaned or cleaned in ["MIN", "WILD"]:
+        return "MIN"
+    if "NASHVILLE" in cleaned or cleaned in ["NSH", "PREDATORS"]:
+        return "NSH"
+    if "PHILADELPHIA" in cleaned or cleaned in ["PHI", "FLYERS"]:
+        return "PHI"
+    if "PITTSBURGH" in cleaned or cleaned in ["PIT", "PENGUINS"]:
+        return "PIT"
+    if "SEATTLE" in cleaned or cleaned in ["SEA", "KRAKEN"]:
+        return "SEA"
+    if "BUFFALO" in cleaned or cleaned in ["BUF", "SABRES"]:
+        return "BUF"
+    if "COLUMBUS" in cleaned or cleaned in ["CBJ", "BLUE JACKETS"]:
+        return "CBJ"
+    if "ANAHEIM" in cleaned or cleaned in ["ANA", "DUCKS"]:
+        return "ANA"
+    if "WASHINGTON" in cleaned or cleaned in ["WSH", "WAS", "CAPITALS"]:
+        return "WSH"
+    if "UTAH" in cleaned or cleaned in ["UTA", "ARI", "ARIZONA", "COYOTES"]:
+        return "UTA"
+
+    return cleaned[:3]
 
 # -------------------------------------------------------------
 # TAB 2: DATA INGESTION & MATRIX
@@ -191,7 +220,7 @@ with tab2:
             "Select Target Threshold Line", 
             threshold_options, 
             index=default_indices.get(selected_market, 0),
-            key="nhl_line_selector"
+            key=f"nhl_line_selector_{selected_market}"
         )
 
     slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="nhl_slate_date")
@@ -269,7 +298,7 @@ with tab2:
                     st.warning(f"Team defense note: {str(te)}")
 
             # ---------------------------------------------------------
-            # 3. SCHEDULE PILLS WITH COMBO PACE FACTORS
+            # 3. SCHEDULE PILLS (PERSISTENT SELECTION ACROSS MARKETS)
             # ---------------------------------------------------------
             game_options_dict = {}
             for away, home in schedule_pairs:
@@ -279,6 +308,7 @@ with tab2:
                 icon = "🔥" if combo >= 2.05 else "⚡" if combo >= 1.95 else ""
                 label = f"{away} @ {home} [{combo} {icon}]".strip()
                 game_options_dict[label] = {
+                    "pair": f"{away}@{home}",
                     "away": away,
                     "home": home,
                     "factor": combo
@@ -290,12 +320,15 @@ with tab2:
                 reverse=True
             )
 
-            # Keyed by market AND date to guarantee date-switches auto-load that slate's matchups
+            # Persist filtered game pairs across market changes
+            pair_to_label = {meta["pair"]: lbl for lbl, meta in game_options_dict.items()}
+            
+            # Key tied ONLY to date so changing prop market NEVER wipes your game filter!
             selected_matchups = st.multiselect(
                 "🎯 Filter Specific Game Matchups (Sorted by Pace Factor)",
                 options=sorted_labels,
                 default=sorted_labels,
-                key=f"nhl_matchups_{selected_market}_{date_str}"
+                key=f"nhl_active_matchups_{date_str}"
             )
 
             # ---------------------------------------------------------
@@ -364,7 +397,7 @@ with tab2:
             merged["Blended_Rate"] = (w_base * merged["Baseline_Stat"] + w_curr * merged["Current_Stat"]).round(4)
             merged["Matchup_Proj"] = (merged["Blended_Rate"] * merged["Matchup_Factor"]).round(4)
 
-            # STRICT SLATE FILTER: Only display teams playing in selected matchups on today's schedule
+            # STRICT SLATE FILTER: Only display skaters from selected active matchups
             active_teams = []
             if selected_matchups:
                 for label in selected_matchups:
@@ -516,7 +549,7 @@ with tab1:
 
         st.session_state["nhl_bet_slip"] = edited_slip.to_dict(orient="records")
 
-        # Live Edge Evaluation (Strictly evaluating rows with valid entered odds)
+        # Live Edge Evaluation
         st.markdown("### 📈 Live Edge Evaluation:")
         edge_data = []
 
