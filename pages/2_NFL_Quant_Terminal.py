@@ -60,13 +60,21 @@ profit_boost = st.sidebar.number_input(
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
 # -------------------------------------------------------------
-# ROBUST TEAM NORMALIZER
+# ROBUST TEAM NORMALIZER (HANDLES LA -> LAR & LAC ACCURATELY)
 # -------------------------------------------------------------
 def normalize_nfl_team(raw_name):
     if not raw_name or pd.isna(raw_name):
         return "NFL"
     cleaned = str(raw_name).strip().upper()
     cleaned = re.sub(r'[^A-Z0-9\s]', '', cleaned)
+
+    # Explicit direct match priority to prevent LA/LAC overlap
+    if cleaned in ["LAC", "CHARGERS", "LA CHARGERS", "SD"]:
+        return "LAC"
+    if cleaned in ["LA", "LAR", "RAMS", "LA RAMS", "STL"]:
+        return "LAR"
+    if cleaned in ["LV", "LVR", "RAIDERS", "OAK"]:
+        return "LV"
 
     alias_map = {
         "ARI": ["ARI", "ARIZONA", "CARDINALS"],
@@ -87,7 +95,7 @@ def normalize_nfl_team(raw_name):
         "KC":  ["KC", "KAN", "KANSAS CITY", "CHIEFS"],
         "LV":  ["LV", "LVR", "LAS VEGAS", "RAIDERS", "OAK"],
         "LAC": ["LAC", "LA CHARGERS", "CHARGERS", "SD"],
-        "LAR": ["LAR", "LA RAMS", "RAMS"],
+        "LAR": ["LAR", "LA", "LA RAMS", "RAMS"],
         "MIA": ["MIA", "MIAMI", "DOLPHINS"],
         "MIN": ["MIN", "MINNESOTA", "VIKINGS"],
         "NE":  ["NE", "NWE", "NEW ENGLAND", "PATRIOTS"],
