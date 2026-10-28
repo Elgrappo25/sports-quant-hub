@@ -23,8 +23,6 @@ st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
 # ==========================================
 if "nba_bet_slip" not in st.session_state:
     st.session_state.nba_bet_slip = []
-if "nba_odds_inputs" not in st.session_state:
-    st.session_state.nba_odds_inputs = {}
 
 # ==========================================
 # 2. SIDEBAR CONTROLS
@@ -40,83 +38,142 @@ min_mpg = st.sidebar.slider("Min Minutes / Game (MPG)", min_value=10.0, max_valu
 tab1, tab2 = st.tabs(["🚀 Live Compound Slip & Profit Boost Calculator", "📊 Slate Matrix & Projections"])
 
 # ------------------------------------------
-# TAB 1: BET SLIP & LIVE BOOST EVALUATOR
+# TAB 1: BET SLIP & LIVE BOOST EVALUATOR (EXACT REPLICA OF NHL/NFL)
 # ------------------------------------------
 with tab1:
-    st.subheader("📋 Active Bet Slip & Odds Comparator")
-    
-    if st.button("🗑️ Clear Entire Bet Slip"):
+    if st.button("🗑️ Clear Bet Slip"):
         st.session_state.nba_bet_slip = []
-        st.session_state.nba_odds_inputs = {}
         st.rerun()
 
     if not st.session_state.nba_bet_slip:
-        st.info("Your bet slip is currently empty. Head to **Tab 2 (Slate Matrix & Projections)** to upload files, view pace pills, and select players.")
+        st.info("Select your sportsbook and enter Nexus Odds. Real-time edges calculate automatically once entered.")
     else:
-        compound_joint_prob = 1.0
-        dec_odds_list = []
-        valid_odds = True
+        df_slip = pd.DataFrame(st.session_state.nba_bet_slip)
 
-        for idx, leg in enumerate(st.session_state.nba_bet_slip):
-            p_name = leg["Player"]
-            m_prob = leg["Model_Over_Prob_%"] / 100.0
-            compound_joint_prob *= m_prob
-            
-            c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
-            with c1:
-                st.write(f"**{p_name}** ({leg['Clean_Team']} {leg['Opponent']})")
-                st.caption(f"{leg['Market']} > {leg['Line']}")
-            with c2:
-                st.metric("Model Win %", f"{leg['Model_Over_Prob_%']}%")
-            with c3:
-                key = f"nba_odds_{p_name}_{leg['Market']}_{leg['Line']}"
-                odds_val = st.text_input("Sportsbook Odds", value=st.session_state.nba_odds_inputs.get(key, "-400"), key=key)
-                st.session_state.nba_odds_inputs[key] = odds_val
-            
-            try:
-                numeric_odds = float(odds_val)
-                if numeric_odds < 0:
-                    dec = 1.0 + (100.0 / abs(numeric_odds))
-                    imp_prob = abs(numeric_odds) / (abs(numeric_odds) + 100.0)
+        # Ensure correct column existence and defaults
+        if "Include in Parlay" not in df_slip.columns:
+            df_slip["Include in Parlay"] = True
+        if "Sportsbook" not in df_slip.columns:
+            df_slip["Sportsbook"] = "FanDuel"
+        if "Nexus Odds (+/-)" not in df_slip.columns:
+            df_slip["Nexus Odds (+/-)"] = None
+        if "Delete" not in df_slip.columns:
+            df_slip["Delete"] = False
+
+        column_order = [
+            "Include in Parlay",
+            "Sportsbook",
+            "Player",
+            "Opponent",
+            "Market",
+            "Line",
+            "Nexus Odds (+/-)",
+            "Model Prob (%)",
+            "Delete"
+        ]
+        df_slip = df_slip[[c for c in column_order if c in df_slip.columns]]
+
+        sportsbook_options = ["FanDuel", "DraftKings", "bet365", "BetMGM", "theScore Bet", "BetRivers"]
+
+        edited_slip = st.data_editor(
+            df_slip,
+            column_config={
+                "Include in Parlay": st.column_config.CheckboxColumn("Include in Parlay", default=True),
+                "Sportsbook": st.column_config.SelectboxColumn("Sportsbook", options=sportsbook_options, default="FanDuel", required=True),
+                "Player": st.column_config.TextColumn("Player", disabled=True),
+                "Opponent": st.column_config.TextColumn("Opponent", disabled=True),
+                "Market": st.column_config.TextColumn("Market", disabled=True),
+                "Line": st.column_config.NumberColumn("Line", disabled=True),
+                "Nexus Odds (+/-)": st.column_config.NumberColumn("Nexus Odds (+/-)", step=1),
+                "Model Prob (%)": st.column_config.NumberColumn("Model Prob (%)", format="%.1f", disabled=True),
+                "Delete": st.column_config.CheckboxColumn("Delete", default=False),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+        # Check for individual deletes
+        if edited_slip["Delete"].any():
+            remaining_slip = edited_slip[edited_slip["Delete"] == False].to_dict("records")
+            st.session_state.nba_bet_slip = remaining_slip
+            st.rerun()
+        else:
+            st.session_state.nba_bet_slip = edited_slip.to_dict("records")
+
+        # Live Edge Evaluation
+        active_legs = []
+        dec_odds_list = []
+        joint_model_prob = 1.0
+
+        for idx, row in edited_slip.iterrows():
+            if row["Include in Parlay"] and pd.notna(row["Nexus Odds (+/-)"]) and row["Nexus Odds (+/-)"] != 0:
+                odds = int(row["Nexus Odds (+/-)"])
+                m_prob = float(row["Model Prob (%)"]) / 100.0
+
+                if odds < 0:
+                    dec = 1.0 + (100.0 / abs(odds))
+                    imp_prob = abs(odds) / (abs(odds) + 100.0)
+                    odds_str = f"{odds}"
                 else:
-                    dec = 1.0 + (numeric_odds / 100.0)
-                    imp_prob = 100.0 / (numeric_odds + 100.0)
-                
+                    dec = 1.0 + (odds / 100.0)
+                    imp_prob = 100.0 / (odds + 100.0)
+                    odds_str = f"+{odds}"
+
                 edge = (m_prob - imp_prob) * 100.0
+
                 dec_odds_list.append(dec)
-                
-                with c4:
-                    st.metric("Implied %", f"{imp_prob * 100:.1f}%")
-                with c5:
-                    st.metric("Edge %", f"{edge:+.1f}%")
-            except:
-                valid_odds = False
-                st.warning("Enter valid American odds (e.g. -350 or +120)")
+                joint_model_prob *= m_prob
+
+                active_legs.append({
+                    "Sportsbook": row["Sportsbook"],
+                    "Player": row["Player"],
+                    "Opponent": row["Opponent"],
+                    "Market": row["Market"],
+                    "Line": row["Line"],
+                    "Odds": odds_str,
+                    "Model Prob": f"{row['Model Prob (%)']:.1f}%",
+                    "Edge %": f"{edge:+.1f}%"
+                })
+
+        st.subheader("📈 Live Edge Evaluation:")
+        if active_legs:
+            df_active = pd.DataFrame(active_legs)
+            st.dataframe(df_active, hide_index=True, use_container_width=True)
+        else:
+            st.caption("Enter your Nexus Odds (+/-) in the table above to view live individual edge calculations.")
 
         st.divider()
         st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
-        
-        if valid_odds and len(dec_odds_list) > 0:
+
+        if dec_odds_list:
             parlay_dec = np.prod(dec_odds_list)
             if parlay_dec >= 2.0:
                 unboosted_am = f"+{int(round((parlay_dec - 1.0) * 100))}"
+                parlay_imp_prob = 100.0 / (float(unboosted_am[1:]) + 100.0)
             else:
                 unboosted_am = f"{int(round(-100.0 / (parlay_dec - 1.0)))}"
-            
+                parlay_imp_prob = abs(float(unboosted_am)) / (abs(float(unboosted_am)) + 100.0)
+
             boosted_profit = (parlay_dec - 1.0) * (1.0 + (boost_pct / 100.0))
             boosted_dec = boosted_profit + 1.0
             if boosted_dec >= 2.0:
                 boosted_am = f"+{int(round((boosted_dec - 1.0) * 100))}"
             else:
                 boosted_am = f"{int(round(-100.0 / (boosted_dec - 1.0)))}"
-            
-            compound_edge = ((compound_joint_prob * boosted_dec) - 1.0) * 100.0
+
+            compound_edge = (joint_model_prob - parlay_imp_prob) * 100.0
 
             r1, r2, r3, r4 = st.columns(4)
             r1.metric("Checked Parlay Odds", unboosted_am)
             r2.metric(f"Boosted (+{boost_pct}%)", boosted_am)
-            r3.metric("Model Slip True Prob", f"{compound_joint_prob * 100:.1f}%")
+            r3.metric("Model Slip True Prob", f"{joint_model_prob * 100:.1f}%")
             r4.metric("Compound Slip Edge", f"{compound_edge:+.1f}%")
+        else:
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Checked Parlay Odds", "--")
+            r2.metric(f"Boosted (+{boost_pct}%)", "--")
+            r3.metric("Model Slip True Prob", "--")
+            r4.metric("Compound Slip Edge", "--")
 
 # ------------------------------------------
 # TAB 2: DATA INGESTION & SLATE MATRIX
@@ -169,18 +226,15 @@ with tab2:
 
     st.divider()
 
-    # Dynamic Live Calendar Date Selector (Defaults to Today)
     selected_date = st.date_input("📅 Select Slate Date:", value=date.today())
     selected_date_str = selected_date.strftime("%Y-%m-%d")
 
-    # Live schedule fetch from ESPN API
     slate_games = fetch_live_nba_schedule(selected_date_str)
     
     if not slate_games:
         st.warning(f"No scheduled NBA games found for {selected_date_str}. Please select another date on the calendar.")
         st.stop()
 
-    # Game Pace & Matchup Pills
     pill_labels = []
     pill_to_game = {}
     for g in slate_games:
@@ -204,7 +258,6 @@ with tab2:
 
     st.divider()
 
-    # Market & Alt-Line Floor Controls
     col_m, col_l = st.columns([1, 1])
     with col_m:
         market_choice = st.selectbox(
@@ -290,18 +343,41 @@ with tab2:
 
     st.write("")
     col_btn1, col_btn2 = st.columns([1, 1])
+    
+    # Left Column: Manual Add
     with col_btn1:
-        if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
-            top_5 = matrix_df.head(5).to_dict("records")
-            for item in top_5:
-                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
-                    st.session_state.nba_bet_slip.append(item)
-            st.success("Transferred Top 5 Floor Plays to Bet Slip!")
-
-    with col_btn2:
         if st.button("➕ Add Selected Players to Bet Slip"):
             selected_rows = edited_matrix[edited_matrix["Select"] == True].to_dict("records")
             for item in selected_rows:
                 if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
-                    st.session_state.nba_bet_slip.append(item)
+                    st.session_state.nba_bet_slip.append({
+                        "Include in Parlay": True,
+                        "Sportsbook": "FanDuel",
+                        "Player": item["Player"],
+                        "Opponent": item["Opponent"],
+                        "Market": item["Market"],
+                        "Line": item["Line"],
+                        "Nexus Odds (+/-)": None,
+                        "Model Prob (%)": item["Model_Over_Prob_%"],
+                        "Delete": False
+                    })
             st.success(f"Added {len(selected_rows)} selections to Bet Slip!")
+
+    # Right Column: Auto-Fill Top 5
+    with col_btn2:
+        if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
+            top_5 = matrix_df.head(5).to_dict("records")
+            for item in top_5:
+                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
+                    st.session_state.nba_bet_slip.append({
+                        "Include in Parlay": True,
+                        "Sportsbook": "FanDuel",
+                        "Player": item["Player"],
+                        "Opponent": item["Opponent"],
+                        "Market": item["Market"],
+                        "Line": item["Line"],
+                        "Nexus Odds (+/-)": None,
+                        "Model Prob (%)": item["Model_Over_Prob_%"],
+                        "Delete": False
+                    })
+            st.success("Transferred Top 5 Floor Plays to Bet Slip!")
