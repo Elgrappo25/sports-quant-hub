@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
+import requests
 from scipy.stats import poisson, norm
 
 # ==========================================
-# 1. MASTER TEAM TRANSLATION & SCHEDULE
+# 1. MASTER TEAM TRANSLATION & LIVE SCHEDULE
 # ==========================================
 TEAM_MAP = {
     "ATL": "Atlanta Hawks", "BOS": "Boston Celtics", "BRK": "Brooklyn Nets",
@@ -19,21 +20,47 @@ TEAM_MAP = {
 }
 REV_TEAM_MAP = {v: k for k, v in TEAM_MAP.items()}
 
-# Schedule reference matching NFL & NHL structures
-NBA_SCHEDULE = [
-    {"date": "2026-10-28", "away": "PHI", "home": "WAS", "matchup": "PHI @ WAS"},
-    {"date": "2026-10-28", "away": "BOS", "home": "MIA", "matchup": "BOS @ MIA"},
-    {"date": "2026-10-28", "away": "LAL", "home": "LAC", "matchup": "LAL @ LAC"},
-    {"date": "2026-10-28", "away": "DEN", "home": "OKC", "matchup": "DEN @ OKC"},
-    {"date": "2026-10-28", "away": "GSW", "home": "SAC", "matchup": "GSW @ SAC"},
-    {"date": "2026-10-28", "away": "MIL", "home": "CHI", "matchup": "MIL @ CHI"},
-    {"date": "2026-10-29", "away": "NYK", "home": "DET", "matchup": "NYK @ DET"},
-    {"date": "2026-10-29", "away": "CLE", "home": "TOR", "matchup": "CLE @ TOR"},
-    {"date": "2026-10-29", "away": "MEM", "home": "HOU", "matchup": "MEM @ HOU"},
-    {"date": "2026-10-29", "away": "DAL", "home": "SAS", "matchup": "DAL @ SAS"},
-    {"date": "2026-10-29", "away": "MIN", "home": "PHO", "matchup": "MIN @ PHO"},
-    {"date": "2026-10-29", "away": "ORL", "home": "ATL", "matchup": "ORL @ ATL"},
-]
+# Translation map for ESPN API team codes to Basketball-Reference codes
+ESPN_ABBREV_MAP = {
+    "BKN": "BRK", "CHA": "CHO", "PHX": "PHO", "WSH": "WAS",
+    "GS": "GSW", "NO": "NOP", "NY": "NYK", "SA": "SAS", "UTAH": "UTA"
+}
+
+def fetch_live_nba_schedule(date_str):
+    """
+    Fetches official daily NBA schedule dynamically from ESPN API for any date (YYYY-MM-DD).
+    Zero API keys needed.
+    """
+    clean_date = date_str.replace("-", "")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={clean_date}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=6)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        
+        games = []
+        for event in data.get("events", []):
+            comp = event.get("competitions", [])[0]
+            competitors = comp.get("competitors", [])
+            
+            home_raw = next(c["team"]["abbreviation"] for c in competitors if c["homeAway"] == "home")
+            away_raw = next(c["team"]["abbreviation"] for c in competitors if c["homeAway"] == "away")
+            
+            home = ESPN_ABBREV_MAP.get(home_raw, home_raw)
+            away = ESPN_ABBREV_MAP.get(away_raw, away_raw)
+            
+            games.append({
+                "date": date_str,
+                "away": away,
+                "home": home,
+                "matchup": f"{away} @ {home}"
+            })
+        return games
+    except Exception:
+        return []
 
 # ==========================================
 # 2. DATA INGESTION & NORMALIZATION
@@ -119,7 +146,6 @@ def calculate_projection_and_odds(per_100_stat, mpg, game_pace, matchup_factor, 
         
     prob_pct = round(prob_over * 100.0, 1)
     
-    # Division-by-zero & boundary safeguards
     if prob_over <= 0.001:
         fair_str = "+10000"
     elif prob_over >= 0.999:
