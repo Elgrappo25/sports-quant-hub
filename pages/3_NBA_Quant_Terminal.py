@@ -7,7 +7,14 @@ from datetime import datetime, date
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from modules.nba_engine import load_nba_datasets, calculate_matchup_factor, calculate_projection_and_odds, NBA_SCHEDULE, TEAM_MAP, REV_TEAM_MAP
+from modules.nba_engine import (
+    load_nba_datasets,
+    calculate_matchup_factor,
+    calculate_projection_and_odds,
+    NBA_SCHEDULE,
+    TEAM_MAP,
+    REV_TEAM_MAP
+)
 
 st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
 
@@ -28,7 +35,7 @@ min_games = st.sidebar.slider("Min Games Played (G)", min_value=1, max_value=20,
 min_mpg = st.sidebar.slider("Min Minutes / Game (MPG)", min_value=10.0, max_value=36.0, value=20.0, step=1.0)
 
 # ==========================================
-# 3. MAIN NAVIGATION TABS (TAB 1 = COMPOUND, TAB 2 = INGESTION & MATRIX)
+# 3. MAIN NAVIGATION TABS
 # ==========================================
 tab1, tab2 = st.tabs(["🚀 Live Compound Slip & Profit Boost Calculator", "📊 Slate Matrix & Projections"])
 
@@ -271,8 +278,29 @@ with tab2:
 
     matrix_df = pd.DataFrame(rows).sort_values(by="Model_Over_Prob_%", ascending=False)
 
+    # Data editor rendered with closed parenthesis
     edited_matrix = st.data_editor(
         matrix_df,
         column_config={"Select": st.column_config.CheckboxColumn(required=True)},
         disabled=["Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_MPG", "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"],
-        hide_index=True
+        hide_index=True,
+        use_container_width=True
+    )
+
+    st.write("")
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
+            top_5 = matrix_df.head(5).to_dict("records")
+            for item in top_5:
+                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
+                    st.session_state.nba_bet_slip.append(item)
+            st.success("Transferred Top 5 Floor Plays to Bet Slip!")
+
+    with col_btn2:
+        if st.button("➕ Add Selected Players to Bet Slip"):
+            selected_rows = edited_matrix[edited_matrix["Select"] == True].to_dict("records")
+            for item in selected_rows:
+                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
+                    st.session_state.nba_bet_slip.append(item)
+            st.success(f"Added {len(selected_rows)} selections to Bet Slip!")
