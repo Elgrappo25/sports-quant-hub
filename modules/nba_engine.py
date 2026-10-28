@@ -19,7 +19,7 @@ TEAM_MAP = {
 }
 REV_TEAM_MAP = {v: k for k, v in TEAM_MAP.items()}
 
-# Schedule reference matching your NFL engine structure
+# Schedule reference matching NFL & NHL structures
 NBA_SCHEDULE = [
     {"date": "2026-10-28", "away": "PHI", "home": "WAS", "matchup": "PHI @ WAS"},
     {"date": "2026-10-28", "away": "BOS", "home": "MIA", "matchup": "BOS @ MIA"},
@@ -38,27 +38,25 @@ NBA_SCHEDULE = [
 # ==========================================
 # 2. DATA INGESTION & NORMALIZATION
 # ==========================================
-def load_nba_datasets(player_csv_path="nba_players_per_poss.csv", team_csv_path="nba_team_ratings.csv"):
-    # Load player rates
-    df_p = pd.read_csv(player_csv_path)
+def load_nba_datasets(player_csv_source, team_csv_source):
+    df_p = pd.read_csv(player_csv_source)
     df_p = df_p[df_p["Player"] != "Player"].dropna(subset=["Player", "Team", "G", "MP"])
     
     numeric_cols = ["G", "GS", "MP", "3P", "3PA", "TRB", "ORB", "DRB", "AST", "PTS"]
     for col in numeric_cols:
-        df_p[col] = pd.to_numeric(df_p[col], errors="coerce").fillna(0.0)
+        if col in df_p.columns:
+            df_p[col] = pd.to_numeric(df_p[col], errors="coerce").fillna(0.0)
     
     df_p["MPG"] = df_p["MP"] / df_p["G"]
     df_p["PRA"] = df_p["PTS"] + df_p["TRB"] + df_p["AST"]
     
-    # Load team ratings (header=1 accounts for multi-index)
-    df_t = pd.read_csv(team_csv_path, header=1)
+    df_t = pd.read_csv(team_csv_source, header=1)
     df_t = df_t.dropna(subset=["Team", "Pace", "DRtg"])
     
     for col in ["Pace", "DRtg", "ORtg", "eFG%.1", "DRB%"]:
         if col in df_t.columns:
             df_t[col] = pd.to_numeric(df_t[col], errors="coerce")
             
-    # Extract League baselines
     lg_row = df_t[df_t["Team"] == "League Average"]
     lg_pace = float(lg_row["Pace"].iloc[0]) if not lg_row.empty else 101.3
     lg_drtg = float(lg_row["DRtg"].iloc[0]) if not lg_row.empty else 112.4
@@ -110,14 +108,12 @@ def calculate_matchup_factor(team_pace, opp_team_data, baselines, market):
     return round(game_pace, 1), round(pace_factor, 4), round(matchup_factor, 4)
 
 def calculate_projection_and_odds(per_100_stat, mpg, game_pace, matchup_factor, line, market):
-    # Scale possessions to projected playing time
     proj_poss = game_pace * (mpg / 48.0)
     proj_mean = (per_100_stat / 100.0) * proj_poss * matchup_factor
     
     if market in ["3-Pointers Made (3PM)", "Assists (AST)"]:
         prob_over = float(poisson.sf(int(np.floor(line)), proj_mean))
     else:
-        # Standard deviation modeled as 35% of mean (minimum sigma floor 2.0)
         sigma = max(proj_mean * 0.35, 2.0)
         prob_over = float(norm.sf(line, loc=proj_mean, scale=sigma))
         
@@ -132,10 +128,6 @@ def calculate_projection_and_odds(per_100_stat, mpg, game_pace, matchup_factor, 
         fair_odds = int(round(- (prob_over / (1.0 - prob_over)) * 100.0))
         fair_str = f"{fair_odds}"
     else:
-        fair_odds = int(round(((1.0 - prob_over) / prob_over) * 100.0))
-        fair_str = f"+{fair_odds}"
-        
-    return round(proj_mean, 2), prob_pct, fair_str
         fair_odds = int(round(((1.0 - prob_over) / prob_over) * 100.0))
         fair_str = f"+{fair_odds}"
         
