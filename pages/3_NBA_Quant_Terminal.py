@@ -38,7 +38,7 @@ min_mpg = st.sidebar.slider("Min Minutes / Game (MPG)", min_value=10.0, max_valu
 tab1, tab2 = st.tabs(["🚀 Live Compound Slip & Profit Boost Calculator", "📊 Slate Matrix & Projections"])
 
 # ------------------------------------------
-# TAB 1: BET SLIP & LIVE BOOST EVALUATOR (EXACT REPLICA OF NHL/NFL)
+# TAB 1: BET SLIP & LIVE BOOST EVALUATOR
 # ------------------------------------------
 with tab1:
     if st.button("🗑️ Clear Bet Slip"):
@@ -348,6 +348,7 @@ with tab2:
     with col_btn1:
         if st.button("➕ Add Selected Players to Bet Slip"):
             selected_rows = edited_matrix[edited_matrix["Select"] == True].to_dict("records")
+            added_count = 0
             for item in selected_rows:
                 if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
                     st.session_state.nba_bet_slip.append({
@@ -361,12 +362,15 @@ with tab2:
                         "Model Prob (%)": item["Model_Over_Prob_%"],
                         "Delete": False
                     })
-            st.success(f"Added {len(selected_rows)} selections to Bet Slip!")
+                    added_count += 1
+            if added_count > 0:
+                st.rerun()
 
     # Right Column: Auto-Fill Top 5
     with col_btn2:
         if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
             top_5 = matrix_df.head(5).to_dict("records")
+            added_count = 0
             for item in top_5:
                 if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
                     st.session_state.nba_bet_slip.append({
@@ -380,4 +384,6 @@ with tab2:
                         "Model Prob (%)": item["Model_Over_Prob_%"],
                         "Delete": False
                     })
-            st.success("Transferred Top 5 Floor Plays to Bet Slip!")
+                    added_count += 1
+            if added_count > 0:
+                st.rerun()
