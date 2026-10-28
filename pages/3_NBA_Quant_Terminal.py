@@ -4,7 +4,7 @@ import numpy as np
 import sys
 import os
 
-# Ensure modules folder is accessible
+# Ensure modules directory is on path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from modules.nba_engine import (
@@ -35,33 +35,136 @@ min_games = st.sidebar.slider("Min Games Played (G)", min_value=1, max_value=20,
 min_mpg = st.sidebar.slider("Min Minutes / Game (MPG)", min_value=10.0, max_value=36.0, value=20.0, step=1.0)
 
 # ==========================================
-# 3. MAIN NAVIGATION TABS
+# 3. MAIN NAVIGATION TABS (TAB 1 = COMPOUND, TAB 2 = INGESTION & MATRIX)
 # ==========================================
-tab2, tab1 = st.tabs(["📊 Slate Matrix & Projections", "🚀 Live Compound Slip & Profit Boost Calculator"])
+tab1, tab2 = st.tabs(["🚀 Live Compound Slip & Profit Boost Calculator", "📊 Slate Matrix & Projections"])
 
 # ------------------------------------------
-# TAB 2: SLATE MATRIX & INGESTION
+# TAB 1: BET SLIP & LIVE BOOST EVALUATOR
+# ------------------------------------------
+with tab1:
+    st.subheader("📋 Active Bet Slip & Odds Comparator")
+    
+    if st.button("🗑️ Clear Entire Bet Slip"):
+        st.session_state.nba_bet_slip = []
+        st.session_state.nba_odds_inputs = {}
+        st.rerun()
+
+    if not st.session_state.nba_bet_slip:
+        st.info("Your bet slip is currently empty. Head to **Tab 2 (Slate Matrix & Projections)** to upload files, view pace pills, and select players.")
+    else:
+        compound_joint_prob = 1.0
+        dec_odds_list = []
+        valid_odds = True
+
+        for idx, leg in enumerate(st.session_state.nba_bet_slip):
+            p_name = leg["Player"]
+            m_prob = leg["Model_Over_Prob_%"] / 100.0
+            compound_joint_prob *= m_prob
+            
+            c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
+            with c1:
+                st.write(f"**{p_name}** ({leg['Clean_Team']} {leg['Opponent']})")
+                st.caption(f"{leg['Market']} > {leg['Line']}")
+            with c2:
+                st.metric("Model Win %", f"{leg['Model_Over_Prob_%']}%")
+            with c3:
+                key = f"nba_odds_{p_name}_{leg['Market']}_{leg['Line']}"
+                odds_val = st.text_input("Sportsbook Odds", value=st.session_state.nba_odds_inputs.get(key, "-400"), key=key)
+                st.session_state.nba_odds_inputs[key] = odds_val
+            
+            try:
+                numeric_odds = float(odds_val)
+                if numeric_odds < 0:
+                    dec = 1.0 + (100.0 / abs(numeric_odds))
+                    imp_prob = abs(numeric_odds) / (abs(numeric_odds) + 100.0)
+                else:
+                    dec = 1.0 + (numeric_odds / 100.0)
+                    imp_prob = 100.0 / (numeric_odds + 100.0)
+                
+                edge = (m_prob - imp_prob) * 100.0
+                dec_odds_list.append(dec)
+                
+                with c4:
+                    st.metric("Implied %", f"{imp_prob * 100:.1f}%")
+                with c5:
+                    st.metric("Edge %", f"{edge:+.1f}%")
+            except:
+                valid_odds = False
+                st.warning("Enter valid American odds (e.g. -350 or +120)")
+
+        st.divider()
+        st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
+        
+        if valid_odds and len(dec_odds_list) > 0:
+            parlay_dec = np.prod(dec_odds_list)
+            if parlay_dec >= 2.0:
+                unboosted_am = f"+{int(round((parlay_dec - 1.0) * 100))}"
+            else:
+                unboosted_am = f"{int(round(-100.0 / (parlay_dec - 1.0)))}"
+            
+            boosted_profit = (parlay_dec - 1.0) * (1.0 + (boost_pct / 100.0))
+            boosted_dec = boosted_profit + 1.0
+            if boosted_dec >= 2.0:
+                boosted_am = f"+{int(round((boosted_dec - 1.0) * 100))}"
+            else:
+                boosted_am = f"{int(round(-100.0 / (boosted_dec - 1.0)))}"
+            
+            compound_edge = ((compound_joint_prob * boosted_dec) - 1.0) * 100.0
+
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Checked Parlay Odds", unboosted_am)
+            r2.metric(f"Boosted (+{boost_pct}%)", boosted_am)
+            r3.metric("Model Slip True Prob", f"{compound_joint_prob * 100:.1f}%")
+            r4.metric("Compound Slip Edge", f"{compound_edge:+.1f}%")
+
+# ------------------------------------------
+# TAB 2: DATA INGESTION & SLATE MATRIX
 # ------------------------------------------
 with tab2:
     st.subheader("📁 Daily Data Ingestion")
-    up_col1, up_col2 = st.columns(2)
     
-    with up_col1:
-        player_file = st.file_uploader("Upload Player Per-100 CSV", type=["csv"], key="nba_p_upload")
-    with up_col2:
-        team_file = st.file_uploader("Upload Team Ratings CSV", type=["csv"], key="nba_t_upload")
+    # Single Central Uploader Button
+    uploaded_files = st.file_uploader(
+        "Upload NBA Data Files (Drag & drop both Player Per-100 & Team Ratings CSVs together)",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="nba_central_uploader"
+    )
 
-    # Fallback to local files if already present in root
+    player_file = None
+    team_file = None
+
+    # Detect files from the single upload button
+    if uploaded_files:
+        for f in uploaded_files:
+            fname = f.name.lower()
+            if "player" in fname or "poss" in fname:
+                player_file = f
+            elif "team" in fname or "rating" in fname:
+                team_file = f
+        
+        # If filenames don't match, inspect header structure
+        if player_file is None or team_file is None:
+            for f in uploaded_files:
+                f.seek(0)
+                first_line = f.readline().decode("utf-8", errors="ignore").lower()
+                f.seek(0)
+                if "player" in first_line:
+                    player_file = f
+                elif "offense four factors" in first_line or "team" in first_line:
+                    team_file = f
+
+    # Fallback to local root files if present
     if player_file is None and os.path.exists("nba_players_per_poss.csv"):
         player_file = "nba_players_per_poss.csv"
     if team_file is None and os.path.exists("nba_team_ratings.csv"):
         team_file = "nba_team_ratings.csv"
 
     if player_file is None or team_file is None:
-        st.info("👆 Please upload both `nba_players_per_poss.csv` and `nba_team_ratings.csv` above to populate the slate matrix.")
+        st.info("👆 Please drop your NBA CSV files into the upload box above to populate the slate matrix.")
         st.stop()
 
-    # Load data using uploaded file objects
     try:
         df_players, team_dict, baselines = load_nba_datasets(player_file, team_file)
     except Exception as e:
@@ -195,82 +298,3 @@ with tab2:
                 if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
                     st.session_state.nba_bet_slip.append(item)
             st.success(f"Added {len(selected_rows)} selections to Bet Slip!")
-
-# ------------------------------------------
-# TAB 1: BET SLIP & LIVE BOOST EVALUATOR
-# ------------------------------------------
-with tab1:
-    st.subheader("📋 Active Bet Slip & Odds Comparator")
-    
-    if st.button("🗑️ Clear Entire Bet Slip"):
-        st.session_state.nba_bet_slip = []
-        st.session_state.nba_odds_inputs = {}
-        st.rerun()
-
-    if not st.session_state.nba_bet_slip:
-        st.info("Your bet slip is empty. Select players in Tab 2 or click 'Auto-Fill Top 5'.")
-    else:
-        compound_joint_prob = 1.0
-        dec_odds_list = []
-        valid_odds = True
-
-        for idx, leg in enumerate(st.session_state.nba_bet_slip):
-            p_name = leg["Player"]
-            m_prob = leg["Model_Over_Prob_%"] / 100.0
-            compound_joint_prob *= m_prob
-            
-            c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
-            with c1:
-                st.write(f"**{p_name}** ({leg['Clean_Team']} {leg['Opponent']})")
-                st.caption(f"{leg['Market']} > {leg['Line']}")
-            with c2:
-                st.metric("Model Win %", f"{leg['Model_Over_Prob_%']}%")
-            with c3:
-                key = f"nba_odds_{p_name}_{leg['Market']}_{leg['Line']}"
-                odds_val = st.text_input("Sportsbook Odds", value=st.session_state.nba_odds_inputs.get(key, "-400"), key=key)
-                st.session_state.nba_odds_inputs[key] = odds_val
-            
-            try:
-                numeric_odds = float(odds_val)
-                if numeric_odds < 0:
-                    dec = 1.0 + (100.0 / abs(numeric_odds))
-                    imp_prob = abs(numeric_odds) / (abs(numeric_odds) + 100.0)
-                else:
-                    dec = 1.0 + (numeric_odds / 100.0)
-                    imp_prob = 100.0 / (numeric_odds + 100.0)
-                
-                edge = (m_prob - imp_prob) * 100.0
-                dec_odds_list.append(dec)
-                
-                with c4:
-                    st.metric("Implied %", f"{imp_prob * 100:.1f}%")
-                with c5:
-                    st.metric("Edge %", f"{edge:+.1f}%")
-            except:
-                valid_odds = False
-                st.warning("Enter valid American odds (e.g. -350 or +120)")
-
-        st.divider()
-        st.subheader("🚀 Live Compound Slip & Profit Boost Calculator")
-        
-        if valid_odds and len(dec_odds_list) > 0:
-            parlay_dec = np.prod(dec_odds_list)
-            if parlay_dec >= 2.0:
-                unboosted_am = f"+{int(round((parlay_dec - 1.0) * 100))}"
-            else:
-                unboosted_am = f"{int(round(-100.0 / (parlay_dec - 1.0)))}"
-            
-            boosted_profit = (parlay_dec - 1.0) * (1.0 + (boost_pct / 100.0))
-            boosted_dec = boosted_profit + 1.0
-            if boosted_dec >= 2.0:
-                boosted_am = f"+{int(round((boosted_dec - 1.0) * 100))}"
-            else:
-                boosted_am = f"{int(round(-100.0 / (boosted_dec - 1.0)))}"
-            
-            compound_edge = ((compound_joint_prob * boosted_dec) - 1.0) * 100.0
-
-            r1, r2, r3, r4 = st.columns(4)
-            r1.metric("Checked Parlay Odds", unboosted_am)
-            r2.metric(f"Boosted (+{boost_pct}%)", boosted_am)
-            r3.metric("Model Slip True Prob", f"{compound_joint_prob * 100:.1f}%")
-            r4.metric("Compound Slip Edge", f"{compound_edge:+.1f}%")
