@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+from datetime import datetime, date
 
 # Ensure modules directory is on path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -124,7 +125,7 @@ with tab1:
 with tab2:
     st.subheader("📁 Daily Data Ingestion")
     
-    # Single Central Uploader Button
+    # Central multi-file uploader
     uploaded_files = st.file_uploader(
         "Upload NBA Data Files (Drag & drop both Player Per-100 & Team Ratings CSVs together)",
         type=["csv"],
@@ -135,7 +136,6 @@ with tab2:
     player_file = None
     team_file = None
 
-    # Detect files from the single upload button
     if uploaded_files:
         for f in uploaded_files:
             fname = f.name.lower()
@@ -144,7 +144,6 @@ with tab2:
             elif "team" in fname or "rating" in fname:
                 team_file = f
         
-        # If filenames don't match, inspect header structure
         if player_file is None or team_file is None:
             for f in uploaded_files:
                 f.seek(0)
@@ -173,12 +172,20 @@ with tab2:
 
     st.divider()
 
-    # Schedule & Game Pace Pills
-    available_dates = sorted(list(set(g["date"] for g in NBA_SCHEDULE)))
-    selected_date = st.selectbox("📅 Select Slate Date:", available_dates, index=0)
+    # Interactive Calendar Date Selector (matching NFL & NHL)
+    schedule_dates = sorted(list(set(g["date"] for g in NBA_SCHEDULE)))
+    default_date = datetime.strptime(schedule_dates[0], "%Y-%m-%d").date() if schedule_dates else date.today()
+    
+    selected_date = st.date_input("📅 Select Slate Date:", value=default_date)
+    selected_date_str = selected_date.strftime("%Y-%m-%d")
 
-    slate_games = [g for g in NBA_SCHEDULE if g["date"] == selected_date]
+    slate_games = [g for g in NBA_SCHEDULE if g["date"] == selected_date_str]
+    
+    if not slate_games:
+        st.warning(f"No scheduled games found for {selected_date_str}. Please select a date with scheduled games (e.g. {schedule_dates[0]}).")
+        st.stop()
 
+    # Game Pace & Matchup Pills
     pill_labels = []
     pill_to_game = {}
     for g in slate_games:
@@ -198,7 +205,7 @@ with tab2:
 
     st.divider()
 
-    # Alt Line & Market Controls
+    # Market & Milestone Alt-Line Floor Controls
     col_m, col_l = st.columns([1, 1])
     with col_m:
         market_choice = st.selectbox(
@@ -274,6 +281,17 @@ with tab2:
 
     matrix_df = pd.DataFrame(rows).sort_values(by="Model_Over_Prob_%", ascending=False)
 
+    # 1. DATA GRID DISPLAYED FIRST
+    edited_matrix = st.data_editor(
+        matrix_df,
+        column_config={"Select": st.column_config.CheckboxColumn(required=True)},
+        disabled=["Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_MPG", "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"],
+        hide_index=True,
+        use_container_width=True
+    )
+
+    # 2. ACTION BUTTONS PLACED DIRECTLY UNDER THE DATA
+    st.write("")
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
         if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
@@ -282,14 +300,6 @@ with tab2:
                 if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
                     st.session_state.nba_bet_slip.append(item)
             st.success("Transferred Top 5 Floor Plays to Bet Slip!")
-
-    edited_matrix = st.data_editor(
-        matrix_df,
-        column_config={"Select": st.column_config.CheckboxColumn(required=True)},
-        disabled=["Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_MPG", "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"],
-        hide_index=True,
-        use_container_width=True
-    )
 
     with col_btn2:
         if st.button("➕ Add Selected Players to Bet Slip"):
