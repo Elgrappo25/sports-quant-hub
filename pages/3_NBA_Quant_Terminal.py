@@ -35,48 +35,67 @@ min_games = st.sidebar.slider("Min Games Played (G)", min_value=1, max_value=20,
 min_mpg = st.sidebar.slider("Min Minutes / Game (MPG)", min_value=10.0, max_value=36.0, value=20.0, step=1.0)
 
 # ==========================================
-# 3. DATA INGESTION
-# ==========================================
-try:
-    df_players, team_dict, baselines = load_nba_datasets()
-except Exception as e:
-    st.error(f"Error loading CSV files: {e}. Please ensure 'nba_players_per_poss.csv' and 'nba_team_ratings.csv' are in the root directory.")
-    st.stop()
-
-# ==========================================
-# 4. SCHEDULE & PACE PILL GENERATION
-# ==========================================
-available_dates = sorted(list(set(g["date"] for g in NBA_SCHEDULE)))
-selected_date = st.selectbox("📅 Select Slate Date:", available_dates, index=0)
-
-slate_games = [g for g in NBA_SCHEDULE if g["date"] == selected_date]
-
-pill_labels = []
-pill_to_game = {}
-for g in slate_games:
-    away = g["away"]
-    home = g["home"]
-    away_pace = team_dict.get(away, {}).get("Pace", baselines["pace"])
-    home_pace = team_dict.get(home, {}).get("Pace", baselines["pace"])
-    game_pace = (away_pace + home_pace) / 2.0
-    
-    icon = "🔥" if game_pace >= 102.5 else ("🧊" if game_pace < 99.5 else "⚡")
-    label = f"{away} @ {home} [{game_pace:.1f} {icon}]"
-    pill_labels.append(label)
-    pill_to_game[label] = (away, home, game_pace)
-
-selected_pills = st.multiselect("Select Games to Analyze:", pill_labels, default=pill_labels)
-selected_matchups = [pill_to_game[p] for p in selected_pills]
-
-# ==========================================
-# 5. MAIN NAVIGATION TABS
+# 3. MAIN NAVIGATION TABS
 # ==========================================
 tab2, tab1 = st.tabs(["📊 Slate Matrix & Projections", "🚀 Live Compound Slip & Profit Boost Calculator"])
 
 # ------------------------------------------
-# TAB 2: SLATE MATRIX
+# TAB 2: SLATE MATRIX & INGESTION
 # ------------------------------------------
 with tab2:
+    st.subheader("📁 Daily Data Ingestion")
+    up_col1, up_col2 = st.columns(2)
+    
+    with up_col1:
+        player_file = st.file_uploader("Upload Player Per-100 CSV", type=["csv"], key="nba_p_upload")
+    with up_col2:
+        team_file = st.file_uploader("Upload Team Ratings CSV", type=["csv"], key="nba_t_upload")
+
+    # Fallback to local files if already present in root
+    if player_file is None and os.path.exists("nba_players_per_poss.csv"):
+        player_file = "nba_players_per_poss.csv"
+    if team_file is None and os.path.exists("nba_team_ratings.csv"):
+        team_file = "nba_team_ratings.csv"
+
+    if player_file is None or team_file is None:
+        st.info("👆 Please upload both `nba_players_per_poss.csv` and `nba_team_ratings.csv` above to populate the slate matrix.")
+        st.stop()
+
+    # Load data using uploaded file objects
+    try:
+        df_players, team_dict, baselines = load_nba_datasets(player_file, team_file)
+    except Exception as e:
+        st.error(f"Error reading CSV files: {e}")
+        st.stop()
+
+    st.divider()
+
+    # Schedule & Game Pace Pills
+    available_dates = sorted(list(set(g["date"] for g in NBA_SCHEDULE)))
+    selected_date = st.selectbox("📅 Select Slate Date:", available_dates, index=0)
+
+    slate_games = [g for g in NBA_SCHEDULE if g["date"] == selected_date]
+
+    pill_labels = []
+    pill_to_game = {}
+    for g in slate_games:
+        away = g["away"]
+        home = g["home"]
+        away_pace = team_dict.get(away, {}).get("Pace", baselines["pace"])
+        home_pace = team_dict.get(home, {}).get("Pace", baselines["pace"])
+        game_pace = (away_pace + home_pace) / 2.0
+        
+        icon = "🔥" if game_pace >= 102.5 else ("🧊" if game_pace < 99.5 else "⚡")
+        label = f"{away} @ {home} [{game_pace:.1f} {icon}]"
+        pill_labels.append(label)
+        pill_to_game[label] = (away, home, game_pace)
+
+    selected_pills = st.multiselect("Select Games to Analyze:", pill_labels, default=pill_labels)
+    selected_matchups = [pill_to_game[p] for p in selected_pills]
+
+    st.divider()
+
+    # Alt Line & Market Controls
     col_m, col_l = st.columns([1, 1])
     with col_m:
         market_choice = st.selectbox(
