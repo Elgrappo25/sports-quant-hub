@@ -115,18 +115,27 @@ def calculate_projection_and_odds(per_100_stat, mpg, game_pace, matchup_factor, 
     proj_mean = (per_100_stat / 100.0) * proj_poss * matchup_factor
     
     if market in ["3-Pointers Made (3PM)", "Assists (AST)"]:
-        prob_over = poisson.sf(int(np.floor(line)), proj_mean)
+        prob_over = float(poisson.sf(int(np.floor(line)), proj_mean))
     else:
         # Standard deviation modeled as 35% of mean (minimum sigma floor 2.0)
         sigma = max(proj_mean * 0.35, 2.0)
-        prob_over = norm.sf(line, loc=proj_mean, scale=sigma)
+        prob_over = float(norm.sf(line, loc=proj_mean, scale=sigma))
         
     prob_pct = round(prob_over * 100.0, 1)
     
-    if prob_over >= 0.5:
+    # Division-by-zero & boundary safeguards
+    if prob_over <= 0.001:
+        fair_str = "+10000"
+    elif prob_over >= 0.999:
+        fair_str = "-10000"
+    elif prob_over >= 0.5:
         fair_odds = int(round(- (prob_over / (1.0 - prob_over)) * 100.0))
         fair_str = f"{fair_odds}"
     else:
+        fair_odds = int(round(((1.0 - prob_over) / prob_over) * 100.0))
+        fair_str = f"+{fair_odds}"
+        
+    return round(proj_mean, 2), prob_pct, fair_str
         fair_odds = int(round(((1.0 - prob_over) / prob_over) * 100.0))
         fair_str = f"+{fair_odds}"
         
