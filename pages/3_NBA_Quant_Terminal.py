@@ -5,17 +5,9 @@ import sys
 import os
 from datetime import datetime, date
 
-# Ensure modules directory is on path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from modules.nba_engine import (
-    load_nba_datasets,
-    calculate_matchup_factor,
-    calculate_projection_and_odds,
-    NBA_SCHEDULE,
-    TEAM_MAP,
-    REV_TEAM_MAP
-)
+from modules.nba_engine import load_nba_datasets, calculate_matchup_factor, calculate_projection_and_odds, NBA_SCHEDULE, TEAM_MAP, REV_TEAM_MAP
 
 st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
 
@@ -125,7 +117,6 @@ with tab1:
 with tab2:
     st.subheader("📁 Daily Data Ingestion")
     
-    # Central multi-file uploader
     uploaded_files = st.file_uploader(
         "Upload NBA Data Files (Drag & drop both Player Per-100 & Team Ratings CSVs together)",
         type=["csv"],
@@ -154,7 +145,6 @@ with tab2:
                 elif "offense four factors" in first_line or "team" in first_line:
                     team_file = f
 
-    # Fallback to local root files if present
     if player_file is None and os.path.exists("nba_players_per_poss.csv"):
         player_file = "nba_players_per_poss.csv"
     if team_file is None and os.path.exists("nba_team_ratings.csv"):
@@ -172,7 +162,7 @@ with tab2:
 
     st.divider()
 
-    # Interactive Calendar Date Selector (matching NFL & NHL)
+    # Calendar Date Selector
     schedule_dates = sorted(list(set(g["date"] for g in NBA_SCHEDULE)))
     default_date = datetime.strptime(schedule_dates[0], "%Y-%m-%d").date() if schedule_dates else date.today()
     
@@ -205,7 +195,7 @@ with tab2:
 
     st.divider()
 
-    # Market & Milestone Alt-Line Floor Controls
+    # Market & Alt-Line Floor Controls
     col_m, col_l = st.columns([1, 1])
     with col_m:
         market_choice = st.selectbox(
@@ -281,30 +271,8 @@ with tab2:
 
     matrix_df = pd.DataFrame(rows).sort_values(by="Model_Over_Prob_%", ascending=False)
 
-    # 1. DATA GRID DISPLAYED FIRST
     edited_matrix = st.data_editor(
         matrix_df,
         column_config={"Select": st.column_config.CheckboxColumn(required=True)},
         disabled=["Player", "Clean_Team", "Opponent", "Baseline_Stat", "Current_MPG", "Matchup_Factor", "Matchup_Proj", "Model_Over_Prob_%", "Fair_American_Odds", "Market", "Line"],
-        hide_index=True,
-        use_container_width=True
-    )
-
-    # 2. ACTION BUTTONS PLACED DIRECTLY UNDER THE DATA
-    st.write("")
-    col_btn1, col_btn2 = st.columns([1, 1])
-    with col_btn1:
-        if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
-            top_5 = matrix_df.head(5).to_dict("records")
-            for item in top_5:
-                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
-                    st.session_state.nba_bet_slip.append(item)
-            st.success("Transferred Top 5 Floor Plays to Bet Slip!")
-
-    with col_btn2:
-        if st.button("➕ Add Selected Players to Bet Slip"):
-            selected_rows = edited_matrix[edited_matrix["Select"] == True].to_dict("records")
-            for item in selected_rows:
-                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
-                    st.session_state.nba_bet_slip.append(item)
-            st.success(f"Added {len(selected_rows)} selections to Bet Slip!")
+        hide_index=True
