@@ -11,7 +11,7 @@ from modules.nba_engine import (
     load_nba_datasets,
     calculate_matchup_factor,
     calculate_projection_and_odds,
-    NBA_SCHEDULE,
+    fetch_live_nba_schedule,
     TEAM_MAP,
     REV_TEAM_MAP
 )
@@ -169,17 +169,15 @@ with tab2:
 
     st.divider()
 
-    # Calendar Date Selector
-    schedule_dates = sorted(list(set(g["date"] for g in NBA_SCHEDULE)))
-    default_date = datetime.strptime(schedule_dates[0], "%Y-%m-%d").date() if schedule_dates else date.today()
-    
-    selected_date = st.date_input("📅 Select Slate Date:", value=default_date)
+    # Dynamic Live Calendar Date Selector (Defaults to Today)
+    selected_date = st.date_input("📅 Select Slate Date:", value=date.today())
     selected_date_str = selected_date.strftime("%Y-%m-%d")
 
-    slate_games = [g for g in NBA_SCHEDULE if g["date"] == selected_date_str]
+    # Live schedule fetch from ESPN API
+    slate_games = fetch_live_nba_schedule(selected_date_str)
     
     if not slate_games:
-        st.warning(f"No scheduled games found for {selected_date_str}. Please select a date with scheduled games (e.g. {schedule_dates[0]}).")
+        st.warning(f"No scheduled NBA games found for {selected_date_str}. Please select another date on the calendar.")
         st.stop()
 
     # Game Pace & Matchup Pills
@@ -199,6 +197,10 @@ with tab2:
 
     selected_pills = st.multiselect("Select Games to Analyze:", pill_labels, default=pill_labels)
     selected_matchups = [pill_to_game[p] for p in selected_pills]
+
+    if not selected_matchups:
+        st.info("Select at least one game pill above to view players.")
+        st.stop()
 
     st.divider()
 
@@ -278,7 +280,6 @@ with tab2:
 
     matrix_df = pd.DataFrame(rows).sort_values(by="Model_Over_Prob_%", ascending=False)
 
-    # Data editor rendered with closed parenthesis
     edited_matrix = st.data_editor(
         matrix_df,
         column_config={"Select": st.column_config.CheckboxColumn(required=True)},
