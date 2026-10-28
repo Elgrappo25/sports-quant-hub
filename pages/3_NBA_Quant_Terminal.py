@@ -235,6 +235,7 @@ with tab2:
         st.warning(f"No scheduled NBA games found for {selected_date_str}. Please select another date on the calendar.")
         st.stop()
 
+    # Pill Buttons normalized around 2.00 Combined Baseline (matching NFL & NHL)
     pill_labels = []
     pill_to_game = {}
     for g in slate_games:
@@ -244,8 +245,11 @@ with tab2:
         home_pace = team_dict.get(home, {}).get("Pace", baselines["pace"])
         game_pace = (away_pace + home_pace) / 2.0
         
-        icon = "🔥" if game_pace >= 102.5 else ("🧊" if game_pace < 99.5 else "⚡")
-        label = f"{away} @ {home} [{game_pace:.1f} {icon}]"
+        # Combined Pace Index centered around 2.00
+        combined_index = round((game_pace / baselines["pace"]) * 2.0, 2)
+        
+        icon = "🔥" if combined_index >= 2.03 else ("🧊" if combined_index < 1.98 else "⚡")
+        label = f"{away} @ {home} [{combined_index:.2f} {icon}]"
         pill_labels.append(label)
         pill_to_game[label] = (away, home, game_pace)
 
@@ -366,10 +370,42 @@ with tab2:
             if added_count > 0:
                 st.rerun()
 
-    # Right Column: Auto-Fill Top 5
+    # Right Column: 3-Layer Weighted Auto-Add Engine
     with col_btn2:
         if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
-            top_5 = matrix_df.head(5).to_dict("records")
+            # Layer 1: Target Sweet-Spot Floor Window (72% to 89%)
+            floor_pool = matrix_df[
+                (matrix_df["Model_Over_Prob_%"] >= 72.0) & 
+                (matrix_df["Model_Over_Prob_%"] <= 89.0)
+            ].copy()
+            
+            # Fallback if window is too restrictive on a small slate
+            if len(floor_pool) < 5:
+                floor_pool = matrix_df[matrix_df["Model_Over_Prob_%"] >= 65.0].copy()
+            
+            # Layer 2: Composite Weighting (Probability boosted by Matchup Factor)
+            floor_pool["Weighted_Score"] = floor_pool["Model_Over_Prob_%"] * (floor_pool["Matchup_Factor"] ** 1.5)
+            floor_pool = floor_pool.sort_values(by="Weighted_Score", ascending=False)
+            
+            # Layer 3: Zero Cannibalization (Enforce Max 1 player per team)
+            top_5 = []
+            teams_used = set()
+            for _, row in floor_pool.iterrows():
+                if row["Clean_Team"] not in teams_used:
+                    top_5.append(row.to_dict())
+                    teams_used.add(row["Clean_Team"])
+                if len(top_5) == 5:
+                    break
+                    
+            # Fallback fill if slate has fewer than 5 unique teams
+            if len(top_5) < 5:
+                for _, row in floor_pool.iterrows():
+                    if not any(b["Player"] == row["Player"] for b in top_5):
+                        top_5.append(row.to_dict())
+                    if len(top_5) == 5:
+                        break
+
+            # Instant Transfer with rerun
             added_count = 0
             for item in top_5:
                 if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
