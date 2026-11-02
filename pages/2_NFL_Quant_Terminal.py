@@ -137,9 +137,8 @@ with tab2:
                 df["posteam"] = df["posteam"].apply(normalize_nfl_team)
                 df["defteam"] = df["defteam"].apply(normalize_nfl_team)
 
-                team_game_counts = df.groupby("posteam")["game_id"].nunique().to_dict()
-
                 cached = {}
+                
                 # 1. Calculate All Defensive Factors with 50/50 Dampening
                 def_factors = {}
                 markets_list = ["Receiving Yards", "Receptions", "Anytime Touchdown", "Rushing Yards", "Passing Yards"]
@@ -163,51 +162,71 @@ with tab2:
 
                 cached["def_factors"] = def_factors
 
+                # -------------------------------------------------------------
                 # 2. Vectorized Player Extraction Grouped by (Player, Clean_Team)
+                # (CORRECTED: True Active Games Played per Player)
+                # -------------------------------------------------------------
+
+                # Master active games map across all offensive plays (used for TD & GP checks)
+                pass_g = df[df["passer_player_name"].notna() & ((df["pass_attempt"] == 1.0) | (df["qb_dropback"] == 1.0))][["passer_player_name", "posteam", "game_id"]].drop_duplicates().rename(columns={"passer_player_name": "Player"})
+                rush_g = df[df["rusher_player_name"].notna() & (df["rush_attempt"] == 1.0)][["rusher_player_name", "posteam", "game_id"]].drop_duplicates().rename(columns={"rusher_player_name": "Player"})
+                rec_g = df[df["receiver_player_name"].notna() & (df["pass_attempt"] == 1.0)][["receiver_player_name", "posteam", "game_id"]].drop_duplicates().rename(columns={"receiver_player_name": "Player"})
+                td_g = df[df["td_player_name"].notna() & (df["touchdown"] == 1.0)][["td_player_name", "posteam", "game_id"]].drop_duplicates().rename(columns={"td_player_name": "Player"})
+                all_active = pd.concat([pass_g, rush_g, rec_g, td_g]).drop_duplicates()
+                player_gp_map = all_active.groupby(["Player", "posteam"])["game_id"].nunique().to_dict()
+
+                # Receiving Yards & Receptions (Tracking both yards and catches on targeted games)
+                rec_targets = df[df["receiver_player_name"].notna() & (df["pass_attempt"] == 1.0)].copy()
+                rec_targets["rec_yds"] = rec_targets["receiving_yards"].fillna(0.0)
+                rec_targets["reception"] = (rec_targets["complete_pass"] == 1.0).astype(int)
+
+                p_game_rec = rec_targets.groupby(["receiver_player_name", "posteam", "game_id"]).agg(
+                    game_rec_yds=("rec_yds", "sum"),
+                    game_recs=("reception", "sum")
+                ).reset_index()
+
                 # Receiving Yards
-                rec_df = df[(df["complete_pass"] == 1.0) & df["receiver_player_name"].notna()]
-                p_game_rec = rec_df.groupby(["receiver_player_name", "posteam", "game_id"])["receiving_yards"].sum().reset_index()
                 m_rec_yds = p_game_rec.groupby(["receiver_player_name", "posteam"]).agg(
-                    tot_stat=("receiving_yards", "sum"),
-                    std_stat=("receiving_yards", "std")
+                    tot_stat=("game_rec_yds", "sum"),
+                    std_stat=("game_rec_yds", "std"),
+                    GP=("game_id", "count")
                 ).reset_index().rename(columns={"receiver_player_name": "Player", "posteam": "Clean_Team"})
-                m_rec_yds["GP"] = m_rec_yds["Clean_Team"].map(team_game_counts).fillna(1)
                 m_rec_yds["Baseline_Stat"] = (m_rec_yds["tot_stat"] / m_rec_yds["GP"]).round(1)
                 m_rec_yds["Current_Stat"] = m_rec_yds["Baseline_Stat"]
                 m_rec_yds["Std"] = m_rec_yds["std_stat"].fillna(15.0).clip(lower=5.0).round(1)
                 cached["Receiving Yards"] = m_rec_yds
 
                 # Receptions
-                m_rec = rec_df.groupby(["receiver_player_name", "posteam"]).agg(
-                    tot_stat=("complete_pass", "count")
+                m_rec = p_game_rec.groupby(["receiver_player_name", "posteam"]).agg(
+                    tot_stat=("game_recs", "sum"),
+                    GP=("game_id", "count")
                 ).reset_index().rename(columns={"receiver_player_name": "Player", "posteam": "Clean_Team"})
-                m_rec["GP"] = m_rec["Clean_Team"].map(team_game_counts).fillna(1)
                 m_rec["Baseline_Stat"] = (m_rec["tot_stat"] / m_rec["GP"]).round(1)
                 m_rec["Current_Stat"] = m_rec["Baseline_Stat"]
                 m_rec["Std"] = None
                 cached["Receptions"] = m_rec
 
                 # Rushing Yards
-                rush_df = df[df["rushing_yards"].notna() & df["rusher_player_name"].notna()]
+                rush_df = df[(df["rush_attempt"] == 1.0) & df["rusher_player_name"].notna()]
                 p_game_rush = rush_df.groupby(["rusher_player_name", "posteam", "game_id"])["rushing_yards"].sum().reset_index()
                 m_rush = p_game_rush.groupby(["rusher_player_name", "posteam"]).agg(
                     tot_stat=("rushing_yards", "sum"),
-                    std_stat=("rushing_yards", "std")
+                    std_stat=("rushing_yards", "std"),
+                    GP=("game_id", "count")
                 ).reset_index().rename(columns={"rusher_player_name": "Player", "posteam": "Clean_Team"})
-                m_rush["GP"] = m_rush["Clean_Team"].map(team_game_counts).fillna(1)
                 m_rush["Baseline_Stat"] = (m_rush["tot_stat"] / m_rush["GP"]).round(1)
                 m_rush["Current_Stat"] = m_rush["Baseline_Stat"]
                 m_rush["Std"] = m_rush["std_stat"].fillna(15.0).clip(lower=5.0).round(1)
                 cached["Rushing Yards"] = m_rush
 
                 # Passing Yards
-                pass_df = df[df["passing_yards"].notna() & df["passer_player_name"].notna()]
+                pass_df = df[((df["pass_attempt"] == 1.0) | (df["qb_dropback"] == 1.0)) & df["passer_player_name"].notna()]
                 p_game_pass = pass_df.groupby(["passer_player_name", "posteam", "game_id"])["passing_yards"].sum().reset_index()
                 m_pass = p_game_pass.groupby(["passer_player_name", "posteam"]).agg(
                     tot_stat=("passing_yards", "sum"),
-                    std_stat=("passing_yards", "std")
+                    std_stat=("passing_yards", "std"),
+                    GP=("game_id", "count")
                 ).reset_index().rename(columns={"passer_player_name": "Player", "posteam": "Clean_Team"})
-                m_pass["GP"] = m_pass["Clean_Team"].map(team_game_counts).fillna(1)
                 m_pass["Baseline_Stat"] = (m_pass["tot_stat"] / m_pass["GP"]).round(1)
                 m_pass["Current_Stat"] = m_pass["Baseline_Stat"]
                 m_pass["Std"] = m_pass["std_stat"].fillna(30.0).clip(lower=10.0).round(1)
@@ -218,7 +237,7 @@ with tab2:
                 m_td = td_df.groupby(["td_player_name", "posteam"]).agg(
                     tot_stat=("touchdown", "count")
                 ).reset_index().rename(columns={"td_player_name": "Player", "posteam": "Clean_Team"})
-                m_td["GP"] = m_td["Clean_Team"].map(team_game_counts).fillna(1)
+                m_td["GP"] = m_td.apply(lambda r: player_gp_map.get((r["Player"], r["Clean_Team"]), 1), axis=1)
                 m_td["Baseline_Stat"] = (m_td["tot_stat"] / m_td["GP"]).round(2)
                 m_td["Current_Stat"] = m_td["Baseline_Stat"]
                 m_td["Std"] = None
