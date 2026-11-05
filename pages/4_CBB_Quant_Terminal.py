@@ -11,7 +11,7 @@ st.title("🏀 CBB Quant Terminal: Production Suite")
 st.markdown("KenPom Matchup Efficiency, Multi-Book Best-Line EV Scanner, and Compound Slip Evaluator")
 
 # -------------------------------------------------------------
-# PERSISTENT SESSION STATE INITIALIZATION (ISOLATED CBB NAMESPACE)
+# PERSISTENT SESSION STATE INITIALIZATION
 # -------------------------------------------------------------
 if "cbb_bet_slip" not in st.session_state:
     st.session_state["cbb_bet_slip"] = []
@@ -83,7 +83,6 @@ if st.sidebar.button("🔄 Sync CBB Odds (Costs 3 Credits)", use_container_width
     else:
         with st.sidebar.status("Querying FanDuel, DraftKings, BetMGM, BetRivers, theScore Bet..."):
             url = "https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds"
-            # Target your 5 API-accessible books (espnbet = theScore Bet engine)
             params = {
                 "apiKey": api_key_input,
                 "bookmakers": "fanduel,draftkings,betmgm,betrivers,espnbet",
@@ -111,19 +110,36 @@ if st.session_state["cbb_credits_left"]:
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
 # -------------------------------------------------------------
-# ROBUST TEAM TOKEN RESOLVER
+# STRICT D1 TEAM RESOLVER & ALIAS DICTIONARY
 # -------------------------------------------------------------
-KENPOM_ALIASES = {
+EXPLICIT_KENPOM_MAP = {
     "PENN STATE": "Penn St.",
     "PENN ST": "Penn St.",
     "PENN ST.": "Penn St.",
+    "PENN": "Penn",
     "UCONN": "Connecticut",
+    "CONNECTICUT": "Connecticut",
     "OLE MISS": "Mississippi",
     "NC STATE": "N.C. State",
     "N.C. STATE": "N.C. State",
+    "NORTH CAROLINA STATE": "N.C. State",
     "MIAMI": "Miami FL",
+    "MIAMI (FL)": "Miami FL",
+    "MIAMI FL": "Miami FL",
+    "MIAMI (OH)": "Miami OH",
+    "MIAMI OH": "Miami OH",
     "ST. JOHN'S": "St. John's",
-    "PENN": "Penn",
+    "SAINT JOSEPH'S": "Saint Joseph's",
+    "ST. JOSEPH'S": "Saint Joseph's",
+    "ST. JOE'S": "Saint Joseph's",
+    "SOUTHERN ILLINOIS": "Southern Illinois",
+    "SOUTHERN MISS": "Southern Miss",
+    "SOUTHERN MISSISSIPPI": "Southern Miss",
+    "SOUTHERN UTAH": "Southern Utah",
+    "SOUTHERN": "Southern",
+    "VIRGINIA": "Virginia",
+    "VIRGINIA TECH": "Virginia Tech",
+    "VMI": "VMI",
     "PITT": "Pittsburgh",
     "USC": "USC",
     "LSU": "LSU",
@@ -138,38 +154,63 @@ KENPOM_ALIASES = {
     "UMASS": "Massachusetts"
 }
 
-def normalize_cbb_tokens(name):
+def clean_name_tokens(name):
     s = str(name).upper().strip()
-    s = s.replace("N.C.", "NC").replace("N.C", "NC")
-    s = s.replace("ST.", "STATE").replace("ST ", "STATE ")
+    s = s.replace("&", "AND").replace("N.C.", "NC").replace("ST.", "STATE").replace("ST ", "STATE ")
     if s.endswith(" ST"):
         s = s[:-3] + " STATE"
-    tokens = re.findall(r'[A-Z0-9]+', s)
-    tokens = ["STATE" if t == "ST" else t for t in tokens]
-    return set(tokens)
+    tokens = [t for t in re.findall(r'[A-Z0-9]+', s) if t not in ["THE", "OF", "AT", "UNIVERSITY"]]
+    return set(["STATE" if t == "ST" else t for t in tokens])
 
-def resolve_team(raw_name, candidates_dict):
-    raw_upper = str(raw_name).upper().strip()
-    if raw_upper in KENPOM_ALIASES and KENPOM_ALIASES[raw_upper] in candidates_dict.values():
-        return KENPOM_ALIASES[raw_upper]
+def resolve_d1_team(raw_name, kp_df):
+    """
+    Strictly resolves a team against KenPom summary27.csv.
+    Returns None if the team is non-D1 (e.g. Southern Virginia, Howard Payne),
+    preventing phantom games.
+    """
+    raw_str = str(raw_name).strip()
+    raw_upper = raw_str.upper()
 
-    raw_tokens = normalize_cbb_tokens(raw_name)
-    best_cand = None
-    best_overlap = 0
+    # 1. Direct explicit alias check
+    if raw_upper in EXPLICIT_KENPOM_MAP:
+        target = EXPLICIT_KENPOM_MAP[raw_upper]
+        if target in kp_df["TeamName"].values:
+            return target
 
-    for cand_clean, orig in candidates_dict.items():
-        cand_tokens = normalize_cbb_tokens(orig)
-        # Protect against Penn vs Penn State / Iowa vs Iowa State
-        if ("STATE" in raw_tokens) != ("STATE" in cand_tokens):
+    # 2. Exact match in KenPom
+    if raw_str in kp_df["TeamName"].values:
+        return raw_str
+
+    raw_tokens = clean_name_tokens(raw_str)
+    best_match = None
+
+    # 3. Guarded token match against real D1 teams
+    for kp_name in kp_df["TeamName"].unique():
+        kp_tokens = clean_name_tokens(kp_name)
+
+        # Disallow mismatch on STATE (e.g. Penn vs Penn St, Iowa vs Iowa St)
+        if ("STATE" in raw_tokens) != ("STATE" in kp_tokens):
             continue
-        overlap = len(raw_tokens.intersection(cand_tokens))
-        if overlap > best_overlap and overlap >= min(len(raw_tokens), 1):
-            best_overlap = overlap
-            best_cand = orig
 
-    return best_cand if best_cand else raw_name
+        # Strict directional guards (reject Southern Virginia matching Virginia)
+        if "SOUTHERN" in raw_tokens and "SOUTHERN" not in kp_tokens:
+            continue
+        if "WESTERN" in raw_tokens and "WESTERN" not in kp_tokens:
+            continue
+        if "EASTERN" in raw_tokens and "EASTERN" not in kp_tokens:
+            continue
+        if "NORTHERN" in raw_tokens and "NORTHERN" not in kp_tokens:
+            continue
+        if "CENTRAL" in raw_tokens and "CENTRAL" not in kp_tokens:
+            continue
 
-# Helper math functions
+        # Check full subset containment
+        if kp_tokens.issubset(raw_tokens) or raw_tokens.issubset(kp_tokens):
+            if best_match is None or len(kp_tokens) > len(clean_name_tokens(best_match)):
+                best_match = kp_name
+
+    return best_match
+
 def american_to_implied(odds):
     try:
         odds = float(odds)
@@ -184,7 +225,7 @@ def prob_to_american(p):
     return int(round(- (prob_dec / (1.0 - prob_dec)) * 100)) if prob_dec >= 0.5 else int(round(((1.0 - prob_dec) / prob_dec) * 100))
 
 # -------------------------------------------------------------
-# TAB 2: DATA DROPZONE, SLATE MATRICES & MULTI-BOOK SCANNER
+# TAB 2: DATA ENGINE & MARKET SCREENER
 # -------------------------------------------------------------
 with tab2:
     st.subheader("Data Engine: KenPom Ingestion & Market Screener")
@@ -206,7 +247,6 @@ with tab2:
 
     if st.session_state["cbb_raw_kp"] is not None:
         kp_df = st.session_state["cbb_raw_kp"].copy()
-        kp_dict = {re.sub(r'[^A-Z0-9]', '', str(t).upper()): t for t in kp_df["TeamName"].unique()}
 
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
@@ -227,7 +267,7 @@ with tab2:
         date_str = slate_date.strftime("%Y%m%d")
 
         # ---------------------------------------------------------
-        # 1. LIVE ESPN SCHEDULE FETCH
+        # 1. LIVE ESPN SCHEDULE FETCH WITH STRICT D1 FILTER
         # ---------------------------------------------------------
         schedule_events = []
         schedule_labels = {}
@@ -242,8 +282,12 @@ with tab2:
                 away_raw = competitors[1]["team"]["shortDisplayName"]
                 neutral = comp.get("neutralSite", False)
 
-                home_kp = resolve_team(home_raw, kp_dict)
-                away_kp = resolve_team(away_raw, kp_dict)
+                home_kp = resolve_d1_team(home_raw, kp_df)
+                away_kp = resolve_d1_team(away_raw, kp_df)
+
+                # Strict reject: drop game if either school is non-D1
+                if not home_kp or not away_kp:
+                    continue
 
                 tag = f"{away_kp} vs {home_kp}" if neutral else f"{away_kp} @ {home_kp}"
                 schedule_events.append({
@@ -253,7 +297,7 @@ with tab2:
                     "neutral": neutral
                 })
         except Exception as e:
-            st.warning(f"ESPN schedule fetch note: {str(e)}")
+            st.warning(f"ESPN schedule fetch notice: {str(e)}")
 
         # ---------------------------------------------------------
         # 2. MATCHUP EFFICIENCY & MARGIN PROJECTIONS
@@ -331,14 +375,15 @@ with tab2:
             if not st.session_state["cbb_odds_cache"]:
                 return None
 
-            h_tokens = normalize_cbb_tokens(h_name)
-            a_tokens = normalize_cbb_tokens(a_name)
+            h_tokens = clean_name_tokens(h_name)
+            a_tokens = clean_name_tokens(a_name)
 
             best_match_game = None
             for g in st.session_state["cbb_odds_cache"]:
-                gh_tok = normalize_cbb_tokens(g.get("home_team", ""))
-                ga_tok = normalize_cbb_tokens(g.get("away_team", ""))
+                gh_tok = clean_name_tokens(g.get("home_team", ""))
+                ga_tok = clean_name_tokens(g.get("away_team", ""))
 
+                # Strict requirement: both teams must overlap with the cached game
                 if len(h_tokens.intersection(gh_tok)) >= 1 and len(a_tokens.intersection(ga_tok)) >= 1:
                     best_match_game = g
                     break
@@ -366,15 +411,14 @@ with tab2:
                     if mk == "h2h":
                         for o in outs:
                             p = o.get("price")
-                            # Check home outcome
-                            if len(h_tokens.intersection(normalize_cbb_tokens(o.get("name")))) >= 1:
+                            if len(h_tokens.intersection(clean_name_tokens(o.get("name")))) >= 1:
                                 if best_ml is None or p > best_ml[0]:
                                     best_ml = (p, book_disp)
                     elif mk == "spreads":
                         for o in outs:
                             pt = o.get("point")
                             pr = o.get("price", -110)
-                            if len(h_tokens.intersection(normalize_cbb_tokens(o.get("name")))) >= 1:
+                            if len(h_tokens.intersection(clean_name_tokens(o.get("name")))) >= 1:
                                 if best_spread is None or pt > best_spread[0] or (pt == best_spread[0] and pr > best_spread[1]):
                                     best_spread = (pt, pr, book_disp)
                     elif mk == "totals":
@@ -395,10 +439,8 @@ with tab2:
         # 4. MATRIX FORMATTING & AUTOMATIC VALUE FILTERING
         # ---------------------------------------------------------
         if not proj_df.empty:
-            # Enforce max spread filter to remove garbage-time blowouts
             proj_df = proj_df[proj_df["Fair_Spread"].abs() <= max_spread_filter].copy()
 
-            # Merge live odds if cached
             if st.session_state["cbb_odds_cache"]:
                 odds_data = [get_game_market_odds(r["Home_Team"], r["Away_Team"]) for _, r in proj_df.iterrows()]
             else:
@@ -414,7 +456,6 @@ with tab2:
                         b_pt, b_pr, b_name = o_dict["spread"]
 
                     target_spread = b_pt if b_pt is not None else r["Fair_Spread"]
-                    # Dynamic cover prob on target line: Z = (Margin - (-Spread)) / 10.5
                     z = (r["Proj_Margin"] - (-float(target_spread))) / SPREAD_SIGMA
                     cover_prob = round(norm.cdf(z) * 100.0, 1)
 
@@ -447,7 +488,6 @@ with tab2:
                     win_prob = r["Home_Win_Prob_%"] if is_home_fav else r["Away_Win_Prob_%"]
                     fair_ml = r["Fair_Home_ML"] if is_home_fav else r["Fair_Away_ML"]
 
-                    # Filter extreme juice traps (steeper than -450)
                     if fair_ml < -450:
                         continue
 
@@ -499,7 +539,6 @@ with tab2:
             matrix_df = pd.DataFrame(processed_rows)
 
             if not matrix_df.empty:
-                # Prioritize sorting by true edge if odds are live, else by confidence
                 sort_col = "Edge_%" if "Edge_%" in matrix_df.columns else "EV_Edge_%"
                 matrix_df = matrix_df.sort_values(by=sort_col, ascending=False).reset_index(drop=True)
 
@@ -529,7 +568,6 @@ with tab2:
 
                 st.markdown(f"### 📈 Slate Projections & Edge Matrix ({selected_market}):")
 
-                # Build clean display table
                 display_cols = [c for c in filtered_matrix.columns if c not in ["Line", "Odds", "Proj_Margin", "Fair_Total_Val"]]
                 display_table = filtered_matrix[display_cols].copy()
                 display_table.insert(0, "Select", False)
@@ -542,9 +580,6 @@ with tab2:
                     key=f"cbb_matrix_editor_{selected_market}_{date_str}"
                 )
 
-                # ---------------------------------------------------------
-                # 5. DUAL ACTION BUTTONS (ADD TO SLIP / VALUE AUTO-LOAD)
-                # ---------------------------------------------------------
                 col_add_btn, col_auto_btn = st.columns(2)
 
                 with col_add_btn:
