@@ -8,10 +8,10 @@ from scipy.stats import norm
 st.set_page_config(page_title="CBB Quant Terminal", page_icon="🏀", layout="wide")
 
 st.title("🏀 CBB Quant Terminal: Production Suite")
-st.markdown("KenPom Possession Efficiency, Live Main-Market Deviations, and Compound Slip Evaluator")
+st.markdown("KenPom Matchup Efficiency, Multi-Book Best-Line EV Scanner, and Compound Slip Evaluator")
 
 # -------------------------------------------------------------
-# PERSISTENT SESSION STATE INITIALIZATION
+# PERSISTENT SESSION STATE INITIALIZATION (ISOLATED CBB NAMESPACE)
 # -------------------------------------------------------------
 if "cbb_bet_slip" not in st.session_state:
     st.session_state["cbb_bet_slip"] = []
@@ -21,6 +21,9 @@ if "cbb_raw_kp" not in st.session_state:
 
 if "cbb_hca" not in st.session_state:
     st.session_state["cbb_hca"] = 3.2
+
+if "cbb_max_spread" not in st.session_state:
+    st.session_state["cbb_max_spread"] = 10.5
 
 if "cbb_profit_boost" not in st.session_state:
     st.session_state["cbb_profit_boost"] = 30
@@ -46,7 +49,17 @@ hca_val = st.sidebar.slider(
     value=float(st.session_state["cbb_hca"]),
     step=0.1,
     key="cbb_hca",
-    help="D1 national average is ~3.2 pts. High elevation venues (Utah St, Wyoming) can reach 4.5+."
+    help="D1 national baseline is ~3.2 pts. High elevation venues (Utah St, Wyoming) can reach 4.5+."
+)
+
+max_spread_filter = st.sidebar.slider(
+    "Max Spread Filter (Exclude Blowouts)",
+    min_value=4.5,
+    max_value=25.5,
+    value=float(st.session_state["cbb_max_spread"]),
+    step=1.0,
+    key="cbb_max_spread",
+    help="Filters out non-competitive games (e.g. Duke -35.5) where garbage time ruins spread covers."
 )
 
 st.sidebar.markdown("---")
@@ -60,24 +73,25 @@ profit_boost = st.sidebar.number_input(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("📡 The Odds API (Optional Sync)")
+st.sidebar.header("📡 The Odds API (Multi-Book Sync)")
 default_api_key = st.secrets.get("ODDS_API_KEY", "") if hasattr(st, "secrets") else ""
 api_key_input = st.sidebar.text_input("API Key", value=default_api_key, type="password", key="cbb_api_key")
 
-if st.sidebar.button("🔄 Sync CBB Odds (Costs 2 Credits)", use_container_width=True):
+if st.sidebar.button("🔄 Sync CBB Odds (Costs 3 Credits)", use_container_width=True):
     if not api_key_input:
         st.sidebar.error("Enter a valid Odds API Key first.")
     else:
-        with st.sidebar.status("Querying Division 1 Board..."):
+        with st.sidebar.status("Querying FanDuel, DraftKings, BetMGM, BetRivers, theScore Bet..."):
             url = "https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds"
+            # Target your 5 API-accessible books (espnbet = theScore Bet engine)
             params = {
                 "apiKey": api_key_input,
-                "regions": "us",
-                "markets": "h2h,spreads",
+                "bookmakers": "fanduel,draftkings,betmgm,betrivers,espnbet",
+                "markets": "h2h,spreads,totals",
                 "oddsFormat": "american"
             }
             try:
-                res = requests.get(url, params=params, timeout=10)
+                res = requests.get(url, params=params, timeout=12)
                 if res.status_code == 200:
                     st.session_state["cbb_odds_cache"] = res.json()
                     st.session_state["cbb_last_fetch_time"] = pd.Timestamp.now().strftime("%I:%M %p")
@@ -97,16 +111,20 @@ if st.session_state["cbb_credits_left"]:
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
 # -------------------------------------------------------------
-# TEAM NAME RESOLVER (ESPN SCOREBOARD TO KENPOM STANDARDS)
+# ROBUST TEAM TOKEN RESOLVER
 # -------------------------------------------------------------
 KENPOM_ALIASES = {
-    "UCONN": "CONNECTICUT",
-    "OLE MISS": "MISSISSIPPI",
-    "NC STATE": "N.C. STATE",
-    "MIAMI": "MIAMI FL",
-    "ST. JOHN'S": "ST. JOHN'S",
-    "PENN": "PENNSYLVANIA",
-    "PITT": "PITTSBURGH",
+    "PENN STATE": "Penn St.",
+    "PENN ST": "Penn St.",
+    "PENN ST.": "Penn St.",
+    "UCONN": "Connecticut",
+    "OLE MISS": "Mississippi",
+    "NC STATE": "N.C. State",
+    "N.C. STATE": "N.C. State",
+    "MIAMI": "Miami FL",
+    "ST. JOHN'S": "St. John's",
+    "PENN": "Penn",
+    "PITT": "Pittsburgh",
     "USC": "USC",
     "LSU": "LSU",
     "SMU": "SMU",
@@ -117,30 +135,59 @@ KENPOM_ALIASES = {
     "UTSA": "UTSA",
     "VCU": "VCU",
     "UNLV": "UNLV",
-    "UMASS": "MASSACHUSETTS"
+    "UMASS": "Massachusetts"
 }
 
-def clean_str(s):
-    return re.sub(r'[^A-Z0-9]', '', str(s).upper())
+def normalize_cbb_tokens(name):
+    s = str(name).upper().strip()
+    s = s.replace("N.C.", "NC").replace("N.C", "NC")
+    s = s.replace("ST.", "STATE").replace("ST ", "STATE ")
+    if s.endswith(" ST"):
+        s = s[:-3] + " STATE"
+    tokens = re.findall(r'[A-Z0-9]+', s)
+    tokens = ["STATE" if t == "ST" else t for t in tokens]
+    return set(tokens)
 
-def resolve_team(espn_name, kp_teams_dict):
-    cleaned = clean_str(espn_name)
-    if cleaned in kp_teams_dict:
-        return kp_teams_dict[cleaned]
-    if espn_name.upper() in KENPOM_ALIASES:
-        alias_clean = clean_str(KENPOM_ALIASES[espn_name.upper()])
-        if alias_clean in kp_teams_dict:
-            return kp_teams_dict[alias_clean]
-    for k_clean, orig in kp_teams_dict.items():
-        if cleaned in k_clean or k_clean in cleaned:
-            return orig
-    return espn_name
+def resolve_team(raw_name, candidates_dict):
+    raw_upper = str(raw_name).upper().strip()
+    if raw_upper in KENPOM_ALIASES and KENPOM_ALIASES[raw_upper] in candidates_dict.values():
+        return KENPOM_ALIASES[raw_upper]
+
+    raw_tokens = normalize_cbb_tokens(raw_name)
+    best_cand = None
+    best_overlap = 0
+
+    for cand_clean, orig in candidates_dict.items():
+        cand_tokens = normalize_cbb_tokens(orig)
+        # Protect against Penn vs Penn State / Iowa vs Iowa State
+        if ("STATE" in raw_tokens) != ("STATE" in cand_tokens):
+            continue
+        overlap = len(raw_tokens.intersection(cand_tokens))
+        if overlap > best_overlap and overlap >= min(len(raw_tokens), 1):
+            best_overlap = overlap
+            best_cand = orig
+
+    return best_cand if best_cand else raw_name
+
+# Helper math functions
+def american_to_implied(odds):
+    try:
+        odds = float(odds)
+        return 100.0 / (odds + 100.0) if odds > 0 else abs(odds) / (abs(odds) + 100.0)
+    except:
+        return None
+
+def prob_to_american(p):
+    if p <= 0: return 9999
+    if p >= 100: return -9999
+    prob_dec = p / 100.0
+    return int(round(- (prob_dec / (1.0 - prob_dec)) * 100)) if prob_dec >= 0.5 else int(round(((1.0 - prob_dec) / prob_dec) * 100))
 
 # -------------------------------------------------------------
-# TAB 2: MANUAL CSV INGESTION, SLATE FETCH & PROJECTION MATRIX
+# TAB 2: DATA DROPZONE, SLATE MATRICES & MULTI-BOOK SCANNER
 # -------------------------------------------------------------
 with tab2:
-    st.subheader("Single Dropzone: KenPom Ingestion")
+    st.subheader("Data Engine: KenPom Ingestion & Market Screener")
 
     uploaded_kp = st.file_uploader(
         "Drop KenPom summary27.csv file here",
@@ -155,28 +202,32 @@ with tab2:
             raw_df.columns = raw_df.columns.str.strip()
             st.session_state["cbb_raw_kp"] = raw_df
         except Exception as e:
-            st.error(f"Error reading file: {e}")
+            st.error(f"Error reading KenPom file: {e}")
 
-    # Render matrix only once session state contains the uploaded file
     if st.session_state["cbb_raw_kp"] is not None:
         kp_df = st.session_state["cbb_raw_kp"].copy()
-        kp_dict = {clean_str(t): t for t in kp_df["TeamName"].unique()}
+        kp_dict = {re.sub(r'[^A-Z0-9]', '', str(t).upper()): t for t in kp_df["TeamName"].unique()}
 
-        col_market, col_view = st.columns([1, 1])
-        with col_market:
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
             selected_market = st.selectbox(
                 "Target Main Market Selection",
                 ["Spread (Cover)", "Moneyline (Win)", "Game Total (Over)"],
                 key="cbb_market_selector"
             )
-        with col_view:
-            st.metric("Division 1 Teams Tracked", len(kp_df))
+        with c2:
+            target_book_filter = st.selectbox(
+                "Compare Odds Against",
+                ["Best of My Books", "FanDuel", "DraftKings", "BetMGM", "theScore Bet", "BetRivers"],
+                key="cbb_target_book_filter"
+            )
+        with c3:
+            slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="cbb_slate_date")
 
-        slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="cbb_slate_date")
         date_str = slate_date.strftime("%Y%m%d")
 
         # ---------------------------------------------------------
-        # 1. LIVE NCAA D1 SCHEDULE FETCH (ESPN SCOREBOARD)
+        # 1. LIVE ESPN SCHEDULE FETCH
         # ---------------------------------------------------------
         schedule_events = []
         schedule_labels = {}
@@ -202,14 +253,15 @@ with tab2:
                     "neutral": neutral
                 })
         except Exception as e:
-            st.warning(f"Live schedule fetch note: {str(e)}")
+            st.warning(f"ESPN schedule fetch note: {str(e)}")
 
         # ---------------------------------------------------------
-        # 2. MATCHUP EFFICIENCY & SPREAD PROJECTIONS
+        # 2. MATCHUP EFFICIENCY & MARGIN PROJECTIONS
         # ---------------------------------------------------------
         D1_AVG_TEMPO = 71.37
         D1_AVG_EFF = 104.55
         SPREAD_SIGMA = 10.5
+        TOTAL_SIGMA = 14.0
 
         projected_rows = []
         for g in schedule_events:
@@ -222,33 +274,21 @@ with tab2:
             a_row = away_match.iloc[0]
             h_row = home_match.iloc[0]
 
-            # Projected Pace
             proj_pace = (float(a_row["AdjTempo"]) * float(h_row["AdjTempo"])) / D1_AVG_TEMPO
-
-            # Expected Points Per 100 Possessions
             a_pts_100 = (float(a_row["AdjOE"]) * float(h_row["AdjDE"])) / D1_AVG_EFF
             h_pts_100 = (float(h_row["AdjOE"]) * float(a_row["AdjDE"])) / D1_AVG_EFF
 
-            # Venue Adjustment
             venue_hca = 0.0 if g["neutral"] else hca_val
 
-            # Projected Scores & Totals
             a_proj_pts = (a_pts_100 * proj_pace / 100.0) - (venue_hca / 2.0)
             h_proj_pts = (h_pts_100 * proj_pace / 100.0) + (venue_hca / 2.0)
-            margin = h_proj_pts - a_proj_pts  # Positive = Home Favorite
+            margin = h_proj_pts - a_proj_pts
             proj_total = h_proj_pts + a_proj_pts
 
-            # Probabilities
             home_win_prob = round(norm.cdf(margin / SPREAD_SIGMA) * 100.0, 1)
             away_win_prob = round(100.0 - home_win_prob, 1)
 
-            def prob_to_american(p):
-                if p <= 0: return 9999
-                if p >= 100: return -9999
-                prob_dec = p / 100.0
-                return int(round(- (prob_dec / (1.0 - prob_dec)) * 100)) if prob_dec >= 0.5 else int(round(((1.0 - prob_dec) / prob_dec) * 100))
-
-            fair_spread = -round(margin, 1)  # e.g., -4.5 for home favorite
+            fair_spread = -round(margin, 1)
             fair_total = round(proj_total, 1)
             fair_home_ml = prob_to_american(home_win_prob)
             fair_away_ml = prob_to_american(away_win_prob)
@@ -265,6 +305,7 @@ with tab2:
                 "Proj_Pace": round(proj_pace, 1),
                 "Away_Proj_Pts": round(a_proj_pts, 1),
                 "Home_Proj_Pts": round(h_proj_pts, 1),
+                "Proj_Margin": round(margin, 1),
                 "Fair_Spread": fair_spread,
                 "Fair_Total": fair_total,
                 "Home_Win_Prob_%": home_win_prob,
@@ -276,61 +317,225 @@ with tab2:
         proj_df = pd.DataFrame(projected_rows)
 
         # ---------------------------------------------------------
-        # 3. SCHEDULE PILLS MULTISELECT
+        # 3. LIVE MULTI-BOOK EXTRACTION & EV CALCULATION
+        # ---------------------------------------------------------
+        book_key_map = {
+            "fanduel": "FanDuel",
+            "draftkings": "DraftKings",
+            "betmgm": "BetMGM",
+            "betrivers": "BetRivers",
+            "espnbet": "theScore Bet"
+        }
+
+        def get_game_market_odds(h_name, a_name):
+            if not st.session_state["cbb_odds_cache"]:
+                return None
+
+            h_tokens = normalize_cbb_tokens(h_name)
+            a_tokens = normalize_cbb_tokens(a_name)
+
+            best_match_game = None
+            for g in st.session_state["cbb_odds_cache"]:
+                gh_tok = normalize_cbb_tokens(g.get("home_team", ""))
+                ga_tok = normalize_cbb_tokens(g.get("away_team", ""))
+
+                if len(h_tokens.intersection(gh_tok)) >= 1 and len(a_tokens.intersection(ga_tok)) >= 1:
+                    best_match_game = g
+                    break
+
+            if not best_match_game:
+                return None
+
+            best_spread = None   # (point, price, book_name)
+            best_ml = None       # (price, book_name)
+            best_total = None    # (point, price, book_name)
+
+            req_book = target_book_filter.lower().replace(" ", "")
+
+            for bm in best_match_game.get("bookmakers", []):
+                bm_key = bm.get("key", "").lower()
+                if bm_key not in book_key_map:
+                    continue
+                book_disp = book_key_map[bm_key]
+                if target_book_filter != "Best of My Books" and req_book != bm_key and req_book != book_disp.lower().replace(" ", ""):
+                    continue
+
+                for mkt in bm.get("markets", []):
+                    mk = mkt.get("key")
+                    outs = mkt.get("outcomes", [])
+                    if mk == "h2h":
+                        for o in outs:
+                            p = o.get("price")
+                            # Check home outcome
+                            if len(h_tokens.intersection(normalize_cbb_tokens(o.get("name")))) >= 1:
+                                if best_ml is None or p > best_ml[0]:
+                                    best_ml = (p, book_disp)
+                    elif mk == "spreads":
+                        for o in outs:
+                            pt = o.get("point")
+                            pr = o.get("price", -110)
+                            if len(h_tokens.intersection(normalize_cbb_tokens(o.get("name")))) >= 1:
+                                if best_spread is None or pt > best_spread[0] or (pt == best_spread[0] and pr > best_spread[1]):
+                                    best_spread = (pt, pr, book_disp)
+                    elif mk == "totals":
+                        for o in outs:
+                            if o.get("name") == "Over":
+                                pt = o.get("point")
+                                pr = o.get("price", -110)
+                                if best_total is None or pt < best_total[0] or (pt == best_total[0] and pr > best_total[1]):
+                                    best_total = (pt, pr, book_disp)
+
+            return {
+                "spread": best_spread,
+                "ml": best_ml,
+                "total": best_total
+            }
+
+        # ---------------------------------------------------------
+        # 4. MATRIX FORMATTING & AUTOMATIC VALUE FILTERING
         # ---------------------------------------------------------
         if not proj_df.empty:
-            all_tags = proj_df["Tag"].tolist()
-            saved_key = f"cbb_saved_pairs_{date_str}"
-            init_flag_key = f"cbb_slate_init_{date_str}"
-            widget_key = f"cbb_pairs_widget_{date_str}"
+            # Enforce max spread filter to remove garbage-time blowouts
+            proj_df = proj_df[proj_df["Fair_Spread"].abs() <= max_spread_filter].copy()
 
-            if init_flag_key not in st.session_state:
-                st.session_state[saved_key] = all_tags
-                st.session_state[init_flag_key] = True
-
-            if widget_key not in st.session_state:
-                st.session_state[widget_key] = st.session_state.get(saved_key, all_tags)
-
-            st.session_state[widget_key] = [t for t in st.session_state[widget_key] if t in all_tags]
-
-            selected_matchups = st.multiselect(
-                "🎯 Filter Specific Game Matchups (Sorted by Slate Pace)",
-                options=all_tags,
-                format_func=lambda x: schedule_labels.get(x, x),
-                key=widget_key
-            )
-            st.session_state[saved_key] = selected_matchups
-
-            if not selected_matchups:
-                st.info("🎯 Select one or more game matchups above to populate the matrix.")
+            # Merge live odds if cached
+            if st.session_state["cbb_odds_cache"]:
+                odds_data = [get_game_market_odds(r["Home_Team"], r["Away_Team"]) for _, r in proj_df.iterrows()]
             else:
-                filtered_df = proj_df[proj_df["Tag"].isin(selected_matchups)].copy()
+                odds_data = [None] * len(proj_df)
+
+            processed_rows = []
+            for idx, r in proj_df.iterrows():
+                o_dict = odds_data[idx] if idx < len(odds_data) else None
 
                 if selected_market == "Spread (Cover)":
-                    filtered_df["Selection"] = filtered_df.apply(lambda r: f"{r['Home_Team']} {r['Fair_Spread']}", axis=1)
-                    filtered_df["Model_Prob_%"] = 50.0
-                    filtered_df["Market_Line"] = filtered_df["Fair_Spread"]
-                    display_cols = ["Selection", "Tag", "Home_Proj_Pts", "Away_Proj_Pts", "Fair_Spread", "Fair_Total", "Proj_Pace"]
+                    b_pt, b_pr, b_name = (None, None, "FanDuel")
+                    if o_dict and o_dict.get("spread"):
+                        b_pt, b_pr, b_name = o_dict["spread"]
+
+                    target_spread = b_pt if b_pt is not None else r["Fair_Spread"]
+                    # Dynamic cover prob on target line: Z = (Margin - (-Spread)) / 10.5
+                    z = (r["Proj_Margin"] - (-float(target_spread))) / SPREAD_SIGMA
+                    cover_prob = round(norm.cdf(z) * 100.0, 1)
+
+                    implied_pct = american_to_implied(b_pr) * 100.0 if b_pr else 52.38
+                    edge_pct = round(cover_prob - implied_pct, 1) if b_pt is not None else 0.0
+                    pt_diff = round(b_pt - r["Fair_Spread"], 1) if b_pt is not None else 0.0
+
+                    processed_rows.append({
+                        "Selection": f"{r['Home_Team']} {target_spread}",
+                        "Tag": r["Tag"],
+                        "Best_Book": b_name,
+                        "Book_Spread": b_pt if b_pt is not None else "Sync Odds",
+                        "Fair_Spread": r["Fair_Spread"],
+                        "Spread_Diff_Pts": pt_diff,
+                        "Cover_Prob_%": cover_prob,
+                        "Edge_%": edge_pct,
+                        "Line": target_spread,
+                        "Odds": b_pr if b_pr is not None else -110,
+                        "Proj_Margin": r["Proj_Margin"],
+                        "Fair_Total": r["Fair_Total"]
+                    })
 
                 elif selected_market == "Moneyline (Win)":
-                    filtered_df["Selection"] = filtered_df.apply(lambda r: f"{r['Home_Team']} ML" if r["Home_Win_Prob_%"] >= 50 else f"{r['Away_Team']} ML", axis=1)
-                    filtered_df["Model_Prob_%"] = filtered_df.apply(lambda r: r["Home_Win_Prob_%"] if r["Home_Win_Prob_%"] >= 50 else r["Away_Win_Prob_%"], axis=1)
-                    filtered_df["Market_Line"] = 0.0
-                    display_cols = ["Selection", "Tag", "Home_Win_Prob_%", "Away_Win_Prob_%", "Fair_Home_ML", "Fair_Away_ML", "Proj_Pace"]
+                    b_pr, b_name = (None, "FanDuel")
+                    if o_dict and o_dict.get("ml"):
+                        b_pr, b_name = o_dict["ml"]
 
-                else:  # Game Total
-                    filtered_df["Selection"] = filtered_df.apply(lambda r: f"Over {r['Fair_Total']}", axis=1)
-                    filtered_df["Model_Prob_%"] = 50.0
-                    filtered_df["Market_Line"] = filtered_df["Fair_Total"]
-                    display_cols = ["Selection", "Tag", "Fair_Total", "Proj_Pace", "Home_Proj_Pts", "Away_Proj_Pts"]
+                    is_home_fav = r["Home_Win_Prob_%"] >= 50.0
+                    fav_team = r["Home_Team"] if is_home_fav else r["Away_Team"]
+                    win_prob = r["Home_Win_Prob_%"] if is_home_fav else r["Away_Win_Prob_%"]
+                    fair_ml = r["Fair_Home_ML"] if is_home_fav else r["Fair_Away_ML"]
 
-                st.markdown(f"### 📈 Slate Projections Matrix ({selected_market}):")
+                    # Filter extreme juice traps (steeper than -450)
+                    if fair_ml < -450:
+                        continue
 
-                display_matrix = filtered_df[display_cols].copy()
-                display_matrix.insert(0, "Select", False)
+                    implied_pct = american_to_implied(b_pr) * 100.0 if b_pr else (american_to_implied(fair_ml) * 100.0)
+                    edge_pct = round(win_prob - implied_pct, 1) if b_pr is not None else 0.0
+
+                    processed_rows.append({
+                        "Selection": f"{fav_team} ML",
+                        "Tag": r["Tag"],
+                        "Best_Book": b_name,
+                        "Book_ML": f"{b_pr:+d}" if b_pr is not None else "Sync Odds",
+                        "Fair_ML": fair_ml,
+                        "Model_Win_Prob_%": win_prob,
+                        "EV_Edge_%": edge_pct,
+                        "Line": 0.0,
+                        "Odds": b_pr if b_pr is not None else fair_ml,
+                        "Proj_Margin": r["Proj_Margin"],
+                        "Fair_Total": r["Fair_Total"]
+                    })
+
+                else:  # Game Total (Over)
+                    b_pt, b_pr, b_name = (None, None, "FanDuel")
+                    if o_dict and o_dict.get("total"):
+                        b_pt, b_pr, b_name = o_dict["total"]
+
+                    target_total = b_pt if b_pt is not None else r["Fair_Total"]
+                    z = (r["Fair_Total"] - float(target_total)) / TOTAL_SIGMA
+                    over_prob = round(norm.cdf(z) * 100.0, 1)
+
+                    implied_pct = american_to_implied(b_pr) * 100.0 if b_pr else 52.38
+                    edge_pct = round(over_prob - implied_pct, 1) if b_pt is not None else 0.0
+                    pt_diff = round(r["Fair_Total"] - b_pt, 1) if b_pt is not None else 0.0
+
+                    processed_rows.append({
+                        "Selection": f"Over {target_total}",
+                        "Tag": r["Tag"],
+                        "Best_Book": b_name,
+                        "Book_Total": b_pt if b_pt is not None else "Sync Odds",
+                        "Fair_Total": r["Fair_Total"],
+                        "Total_Diff_Pts": pt_diff,
+                        "Over_Prob_%": over_prob,
+                        "Edge_%": edge_pct,
+                        "Line": target_total,
+                        "Odds": b_pr if b_pr is not None else -110,
+                        "Proj_Margin": r["Proj_Margin"],
+                        "Fair_Total_Val": r["Fair_Total"]
+                    })
+
+            matrix_df = pd.DataFrame(processed_rows)
+
+            if not matrix_df.empty:
+                # Prioritize sorting by true edge if odds are live, else by confidence
+                sort_col = "Edge_%" if "Edge_%" in matrix_df.columns else "EV_Edge_%"
+                matrix_df = matrix_df.sort_values(by=sort_col, ascending=False).reset_index(drop=True)
+
+                all_tags = matrix_df["Tag"].tolist()
+                saved_key = f"cbb_saved_pairs_{date_str}"
+                init_flag_key = f"cbb_slate_init_{date_str}"
+                widget_key = f"cbb_pairs_widget_{date_str}"
+
+                if init_flag_key not in st.session_state:
+                    st.session_state[saved_key] = all_tags
+                    st.session_state[init_flag_key] = True
+
+                if widget_key not in st.session_state:
+                    st.session_state[widget_key] = st.session_state.get(saved_key, all_tags)
+
+                st.session_state[widget_key] = [t for t in st.session_state[widget_key] if t in all_tags]
+
+                selected_matchups = st.multiselect(
+                    "🎯 Filter Matchups (Excludes Blowouts > Max Spread)",
+                    options=all_tags,
+                    format_func=lambda x: schedule_labels.get(x, x),
+                    key=widget_key
+                )
+                st.session_state[saved_key] = selected_matchups
+
+                filtered_matrix = matrix_df[matrix_df["Tag"].isin(selected_matchups)].copy()
+
+                st.markdown(f"### 📈 Slate Projections & Edge Matrix ({selected_market}):")
+
+                # Build clean display table
+                display_cols = [c for c in filtered_matrix.columns if c not in ["Line", "Odds", "Proj_Margin", "Fair_Total_Val"]]
+                display_table = filtered_matrix[display_cols].copy()
+                display_table.insert(0, "Select", False)
 
                 edited_df = st.data_editor(
-                    display_matrix,
+                    display_table,
                     hide_index=True,
                     use_container_width=True,
                     column_config={"Select": st.column_config.CheckboxColumn(required=True)},
@@ -338,7 +543,7 @@ with tab2:
                 )
 
                 # ---------------------------------------------------------
-                # 4. DUAL ACTION BUTTONS (ADD TO SLIP / AUTO-LOAD VALUE)
+                # 5. DUAL ACTION BUTTONS (ADD TO SLIP / VALUE AUTO-LOAD)
                 # ---------------------------------------------------------
                 col_add_btn, col_auto_btn = st.columns(2)
 
@@ -348,62 +553,64 @@ with tab2:
                         if not selected_rows.empty:
                             added_count = 0
                             for _, r in selected_rows.iterrows():
-                                match_orig = filtered_df[filtered_df["Selection"] == r["Selection"]].iloc[0]
+                                match_orig = filtered_matrix[filtered_matrix["Selection"] == r["Selection"]].iloc[0]
+                                prob_val = match_orig.get("Cover_Prob_%", match_orig.get("Model_Win_Prob_%", match_orig.get("Over_Prob_%", 50.0)))
                                 new_item = {
                                     "Include in Parlay": True,
-                                    "Sportsbook": "FanDuel",
+                                    "Sportsbook": match_orig["Best_Book"],
                                     "Matchup": match_orig["Tag"],
                                     "Selection": match_orig["Selection"],
                                     "Market": selected_market,
-                                    "Line": match_orig["Market_Line"],
-                                    "Nexus Odds (+/-)": None,
-                                    "Model Prob (%)": match_orig["Model_Prob_%"],
-                                    "Fair_Spread": match_orig["Fair_Spread"],
-                                    "Proj_Margin": round(match_orig["Home_Proj_Pts"] - match_orig["Away_Proj_Pts"], 1),
-                                    "Fair_Total": match_orig["Fair_Total"],
+                                    "Line": match_orig["Line"],
+                                    "Nexus Odds (+/-)": match_orig["Odds"],
+                                    "Model Prob (%)": prob_val,
+                                    "Proj_Margin": match_orig["Proj_Margin"],
+                                    "Fair_Total": match_orig.get("Fair_Total_Val", match_orig.get("Fair_Total", 140.0)),
                                     "Delete": False
                                 }
                                 if not any(d["Selection"] == new_item["Selection"] and d["Market"] == new_item["Market"] for d in st.session_state["cbb_bet_slip"]):
                                     st.session_state["cbb_bet_slip"].append(new_item)
                                     added_count += 1
-                            st.success(f"Added {added_count} selected plays to Tab 1!")
+                            st.success(f"Added {added_count} selected plays to Tab 1 bet slip!")
                         else:
                             st.warning("Please check at least one game in the matrix first.")
 
                 with col_auto_btn:
-                    if st.button("⚡ Auto-Load Top 5 Highest-Confidence Plays", use_container_width=True):
-                        top_candidates = filtered_df.sort_values(by="Model_Prob_%", ascending=False).head(5)
+                    if st.button("⚡ Auto-Load Top 5 Highest-EV Value Plays", use_container_width=True):
+                        top_candidates = filtered_matrix.sort_values(by=sort_col, ascending=False).head(5)
                         added_count = 0
                         for _, match_orig in top_candidates.iterrows():
+                            prob_val = match_orig.get("Cover_Prob_%", match_orig.get("Model_Win_Prob_%", match_orig.get("Over_Prob_%", 50.0)))
                             new_item = {
                                 "Include in Parlay": True,
-                                "Sportsbook": "FanDuel",
+                                "Sportsbook": match_orig["Best_Book"],
                                 "Matchup": match_orig["Tag"],
                                 "Selection": match_orig["Selection"],
                                 "Market": selected_market,
-                                "Line": match_orig["Market_Line"],
-                                "Nexus Odds (+/-)": None,
-                                "Model Prob (%)": match_orig["Model_Prob_%"],
-                                "Fair_Spread": match_orig["Fair_Spread"],
-                                "Proj_Margin": round(match_orig["Home_Proj_Pts"] - match_orig["Away_Proj_Pts"], 1),
-                                "Fair_Total": match_orig["Fair_Total"],
+                                "Line": match_orig["Line"],
+                                "Nexus Odds (+/-)": match_orig["Odds"],
+                                "Model Prob (%)": prob_val,
+                                "Proj_Margin": match_orig["Proj_Margin"],
+                                "Fair_Total": match_orig.get("Fair_Total_Val", match_orig.get("Fair_Total", 140.0)),
                                 "Delete": False
                             }
                             if not any(d["Selection"] == new_item["Selection"] and d["Market"] == new_item["Market"] for d in st.session_state["cbb_bet_slip"]):
                                 st.session_state["cbb_bet_slip"].append(new_item)
                                 added_count += 1
-                        st.success(f"Auto-loaded top {added_count} plays into Tab 1!")
+                        st.success(f"Auto-loaded top {added_count} highest-EV plays into Tab 1!")
+            else:
+                st.info("No games match the current spread/juice criteria on this slate.")
         else:
             st.info("No games found for this slate date. Check your date selection above.")
     else:
-        st.info("Please drop your KenPom summary27.csv file above to populate the matrix.")
+        st.info("Please drop your KenPom summary27.csv file above to activate the CBB engine.")
 
 # -------------------------------------------------------------
 # TAB 1: BET SLIP & ODDS COMPARATOR
 # -------------------------------------------------------------
 with tab1:
     st.subheader("📝 Checked Games & Nexus Odds Comparator")
-    st.caption("Enter your book line and Nexus Odds. Live mathematical edge and compound boost calculate in real time.")
+    st.caption("Select your Sportsbook and enter Nexus Odds. Real-time mathematical edges calculate automatically.")
 
     if st.button("🗑️ Clear Bet Slip"):
         st.session_state["cbb_bet_slip"] = []
@@ -454,20 +661,10 @@ with tab1:
             st.session_state["cbb_bet_slip"][idx]["Nexus Odds (+/-)"] = row["Nexus Odds (+/-)"]
 
         # ---------------------------------------------------------
-        # LIVE EDGE EVALUATION (DYNAMIC NORMAL DISTRIBUTION MATH)
+        # LIVE DYNAMIC EDGE EVALUATION
         # ---------------------------------------------------------
         st.markdown("### 📈 Live Edge Evaluation:")
         edge_data = []
-
-        def american_to_implied(odds):
-            try:
-                odds = float(odds)
-                if odds > 0:
-                    return 100.0 / (odds + 100.0)
-                else:
-                    return abs(odds) / (abs(odds) + 100.0)
-            except:
-                return None
 
         parlay_mult = 1.0
         parlay_prob = 1.0
@@ -480,6 +677,7 @@ with tab1:
             proj_margin = row.get("Proj_Margin", 0.0)
             fair_total = row.get("Fair_Total", 140.0)
 
+            # Recalculate model prob dynamically based on line typed
             if "Spread" in market and user_line is not None and pd.notna(user_line):
                 z = (float(proj_margin) - (-float(user_line))) / 10.5
                 model_prob = round(norm.cdf(z) * 100.0, 1)
