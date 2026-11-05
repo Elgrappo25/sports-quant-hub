@@ -48,8 +48,7 @@ hca_val = st.sidebar.slider(
     max_value=6.0,
     value=float(st.session_state["cbb_hca"]),
     step=0.1,
-    key="cbb_hca",
-    help="D1 national baseline is ~3.2 pts. High elevation venues (Utah St, Wyoming) can reach 4.5+."
+    key="cbb_hca"
 )
 
 max_spread_filter = st.sidebar.slider(
@@ -58,8 +57,7 @@ max_spread_filter = st.sidebar.slider(
     max_value=25.5,
     value=float(st.session_state["cbb_max_spread"]),
     step=1.0,
-    key="cbb_max_spread",
-    help="Filters out non-competitive games (e.g. Duke -35.5) where garbage time ruins spread covers."
+    key="cbb_max_spread"
 )
 
 st.sidebar.markdown("---")
@@ -110,104 +108,289 @@ if st.session_state["cbb_credits_left"]:
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
 # -------------------------------------------------------------
-# STRICT D1 TEAM RESOLVER & ALIAS DICTIONARY
+# MASTER CANONICAL D1 ALIAS MAP & RESOLUTION ENGINE
 # -------------------------------------------------------------
 EXPLICIT_KENPOM_MAP = {
+    # Connecticut split
+    "CENTRAL CONNECTICUT": "Central Connecticut",
+    "CENTRAL CONNECTICUT STATE": "Central Connecticut",
+    "CENTRAL CONN": "Central Connecticut",
+    "CENT. CONN.": "Central Connecticut",
+    "CENT. CONN. ST.": "Central Connecticut",
+    "CENTRAL CONN. ST.": "Central Connecticut",
+    "CENTRAL CONN STATE": "Central Connecticut",
+    "CCSU": "Central Connecticut",
+    "CONNECTICUT": "Connecticut",
+    "UCONN": "Connecticut",
+    "UCONN HUSKIES": "Connecticut",
+
+    # Pennsylvania / Ivy / State splits
     "PENN STATE": "Penn St.",
     "PENN ST": "Penn St.",
     "PENN ST.": "Penn St.",
     "PENN": "Penn",
-    "UCONN": "Connecticut",
-    "CONNECTICUT": "Connecticut",
-    "OLE MISS": "Mississippi",
+    "PENNSYLVANIA": "Penn",
+
+    # Florida
+    "SOUTH FLORIDA": "South Florida",
+    "USF": "South Florida",
+    "CENTRAL FLORIDA": "UCF",
+    "UCF": "UCF",
+    "FLORIDA ATLANTIC": "Florida Atlantic",
+    "FAU": "Florida Atlantic",
+    "FLORIDA GULF COAST": "Florida Gulf Coast",
+    "FGCU": "Florida Gulf Coast",
+    "FLORIDA": "Florida",
+    "FLORIDA STATE": "Florida St.",
+    "FLORIDA ST": "Florida St.",
+    "FLORIDA ST.": "Florida St.",
+    "FLORIDA A&M": "Florida A&M",
+    "FAMU": "Florida A&M",
+    "FLORIDA INTERNATIONAL": "FIU",
+    "FIU": "FIU",
+
+    # Texas
+    "NORTH TEXAS": "North Texas",
+    "UNT": "North Texas",
+    "TEXAS": "Texas",
+    "TEXAS STATE": "Texas St.",
+    "TEXAS ST": "Texas St.",
+    "TEXAS TECH": "Texas Tech",
+    "TEXAS A&M": "Texas A&M",
+    "TEXAS A&M-COMMERCE": "East Texas A&M",
+    "TEXAS A&M COMMERCE": "East Texas A&M",
+    "EAST TEXAS A&M": "East Texas A&M",
+    "TEXAS A&M-CORPUS CHRISTI": "Texas A&M Corpus Chris",
+    "TEXAS A&M CORPUS CHRISTI": "Texas A&M Corpus Chris",
+    "TEXAS A&M-CC": "Texas A&M Corpus Chris",
+    "A&M-CORPUS CHRISTI": "Texas A&M Corpus Chris",
+    "UT RIO GRANDE VALLEY": "UT Rio Grande Valley",
+    "UTRGV": "UT Rio Grande Valley",
+    "RIO GRANDE VALLEY": "UT Rio Grande Valley",
+    "UTEP": "UTEP",
+    "TEXAS-EL PASO": "UTEP",
+    "UTSA": "UTSA",
+    "TEXAS-SAN ANTONIO": "UTSA",
+    "TEXAS SOUTHERN": "Texas Southern",
+    "STEPHEN F. AUSTIN": "Stephen F. Austin",
+    "SFA": "Stephen F. Austin",
+    "SAM HOUSTON": "Sam Houston St.",
+    "SAM HOUSTON STATE": "Sam Houston St.",
+    "SAM HOUSTON ST": "Sam Houston St.",
+    "SAM HOUSTON ST.": "Sam Houston St.",
+
+    # Louisiana
+    "LOUISIANA MONROE": "Louisiana Monroe",
+    "LA MONROE": "Louisiana Monroe",
+    "UL MONROE": "Louisiana Monroe",
+    "ULM": "Louisiana Monroe",
+    "LOUISIANA LAFAYETTE": "Louisiana",
+    "LA LAFAYETTE": "Louisiana",
+    "UL LAFAYETTE": "Louisiana",
+    "LOUISIANA": "Louisiana",
+    "ULL": "Louisiana",
+    "LSU": "LSU",
+    "LOUISIANA TECH": "Louisiana Tech",
+    "LA TECH": "Louisiana Tech",
+    "SOUTHEASTERN LOUISIANA": "Southeastern Louisiana",
+    "SE LOUISIANA": "Southeastern Louisiana",
+    "NEW ORLEANS": "New Orleans",
+    "UNO": "New Orleans",
+
+    # Illinois / Indiana / Missouri
+    "SIU EDWARDSVILLE": "SIUE",
+    "SIU-EDWARDSVILLE": "SIUE",
+    "SIUE": "SIUE",
+    "SOUTHERN ILLINOIS": "Southern Illinois",
+    "SIU": "Southern Illinois",
+    "ILLINOIS CHICAGO": "Illinois Chicago",
+    "UIC": "Illinois Chicago",
+    "ILLINOIS STATE": "Illinois St.",
+    "ILLINOIS": "Illinois",
+    "LOYOLA CHICAGO": "Loyola Chicago",
+    "LOYOLA (IL)": "Loyola Chicago",
+    "LOYOLA IL": "Loyola Chicago",
+    "LOYOLA MARYLAND": "Loyola MD",
+    "LOYOLA (MD)": "Loyola MD",
+    "LOYOLA MD": "Loyola MD",
+    "LOYOLA MARYMOUNT": "Loyola Marymount",
+    "LMU": "Loyola Marymount",
+    "IU INDY": "IU Indianapolis",
+    "IUPUI": "IU Indianapolis",
+    "IU INDIANAPOLIS": "IU Indianapolis",
+    "PURDUE FORT WAYNE": "Purdue Fort Wayne",
+    "FORT WAYNE": "Purdue Fort Wayne",
+    "PFW": "Purdue Fort Wayne",
+    "KANSAS CITY": "Kansas City",
+    "UMKC": "Kansas City",
+
+    # Nebraska / Minnesota / Dakotas
+    "OMAHA": "Omaha",
+    "NEBRASKA OMAHA": "Omaha",
+    "NEB. OMAHA": "Omaha",
+    "NEBRASKA-OMAHA": "Omaha",
+    "NEBRASKA": "Nebraska",
+    "ST. THOMAS": "St. Thomas",
+    "ST. THOMAS (MN)": "St. Thomas",
+    "ST. THOMAS-MINNESOTA": "St. Thomas",
+    "SAINT THOMAS": "St. Thomas",
+
+    # North Carolina / South Carolina / Virginia
     "NC STATE": "N.C. State",
     "N.C. STATE": "N.C. State",
     "NORTH CAROLINA STATE": "N.C. State",
-    "MIAMI": "Miami FL",
-    "MIAMI (FL)": "Miami FL",
-    "MIAMI FL": "Miami FL",
-    "MIAMI (OH)": "Miami OH",
-    "MIAMI OH": "Miami OH",
-    "ST. JOHN'S": "St. John's",
-    "SAINT JOSEPH'S": "Saint Joseph's",
-    "ST. JOSEPH'S": "Saint Joseph's",
-    "ST. JOE'S": "Saint Joseph's",
-    "SOUTHERN ILLINOIS": "Southern Illinois",
-    "SOUTHERN MISS": "Southern Miss",
-    "SOUTHERN MISSISSIPPI": "Southern Miss",
-    "SOUTHERN UTAH": "Southern Utah",
-    "SOUTHERN": "Southern",
+    "NORTH CAROLINA": "North Carolina",
+    "UNC": "North Carolina",
+    "UNC GREENSBORO": "UNC Greensboro",
+    "UNCG": "UNC Greensboro",
+    "UNC ASHEVILLE": "UNC Asheville",
+    "UNCA": "UNC Asheville",
+    "UNC WILMINGTON": "UNC Wilmington",
+    "UNCW": "UNC Wilmington",
+    "USC UPSTATE": "USC Upstate",
+    "SOUTH CAROLINA UPSTATE": "USC Upstate",
+    "SOUTH CAROLINA": "South Carolina",
+    "SOUTH CAROLINA STATE": "South Carolina St.",
+    "SC STATE": "South Carolina St.",
+    "VCU": "VCU",
+    "VIRGINIA COMMONWEALTH": "VCU",
     "VIRGINIA": "Virginia",
     "VIRGINIA TECH": "Virginia Tech",
     "VMI": "VMI",
-    "PITT": "Pittsburgh",
-    "USC": "USC",
-    "LSU": "LSU",
+
+    # Mississippi / Alabama
+    "OLE MISS": "Mississippi",
+    "MISSISSIPPI": "Mississippi",
+    "MISSISSIPPI STATE": "Mississippi St.",
+    "MISSISSIPPI ST": "Mississippi St.",
+    "SOUTHERN MISS": "Southern Miss",
+    "SOUTHERN MISSISSIPPI": "Southern Miss",
+    "USM": "Southern Miss",
+
+    # Miami & Ohio
+    "MIAMI FL": "Miami FL",
+    "MIAMI (FL)": "Miami FL",
+    "MIAMI": "Miami FL",
+    "MIAMI HURRICANES": "Miami FL",
+    "MIAMI OH": "Miami OH",
+    "MIAMI (OH)": "Miami OH",
+    "MIAMI REDHAWKS": "Miami OH",
+
+    # Saints & Universities
+    "ST. JOHN'S": "St. John's",
+    "SAINT JOHN'S": "St. John's",
+    "SAINT JOSEPH'S": "Saint Joseph's",
+    "ST. JOSEPH'S": "Saint Joseph's",
+    "ST. JOE'S": "Saint Joseph's",
+    "SAINT MARY'S": "Saint Mary's",
+    "ST. MARY'S": "Saint Mary's",
+    "SAINT PETER'S": "Saint Peter's",
+    "ST. PETER'S": "Saint Peter's",
+    "SAINT LOUIS": "Saint Louis",
+    "ST. LOUIS": "Saint Louis",
+
+    # Other D1 Acronyms & Quirks
     "SMU": "SMU",
     "BYU": "BYU",
     "TCU": "TCU",
-    "UCF": "UCF",
-    "UTEP": "UTEP",
-    "UTSA": "UTSA",
-    "VCU": "VCU",
     "UNLV": "UNLV",
-    "UMASS": "Massachusetts"
+    "UMASS": "Massachusetts",
+    "UMASS LOWELL": "UMass Lowell",
+    "MASSACHUSETTS LOWELL": "UMass Lowell",
+    "ALBANY": "Albany",
+    "SUNY ALBANY": "Albany",
+    "BINGHAMTON": "Binghamton",
+    "BUFFALO": "Buffalo",
+    "STONY BROOK": "Stony Brook",
+    "MCNEESE": "McNeese",
+    "MCNEESE STATE": "McNeese",
+    "MCNEESE ST": "McNeese",
+    "MCNEESE ST.": "McNeese",
+    "NICHOLLS": "Nicholls St.",
+    "NICHOLLS STATE": "Nicholls St.",
+    "GRAMBLING": "Grambling St.",
+    "GRAMBLING STATE": "Grambling St.",
+    "ALCORN": "Alcorn St.",
+    "ALCORN STATE": "Alcorn St."
+}
+
+DIRECTIONALS = {
+    "NORTH", "SOUTH", "EAST", "WEST", "CENTRAL",
+    "NORTHERN", "SOUTHERN", "EASTERN", "WESTERN", "MIDDLE"
 }
 
 def clean_name_tokens(name):
     s = str(name).upper().strip()
-    s = s.replace("&", "AND").replace("N.C.", "NC").replace("ST.", "STATE").replace("ST ", "STATE ")
-    if s.endswith(" ST"):
-        s = s[:-3] + " STATE"
-    tokens = [t for t in re.findall(r'[A-Z0-9]+', s) if t not in ["THE", "OF", "AT", "UNIVERSITY"]]
-    return set(["STATE" if t == "ST" else t for t in tokens])
+    s = s.replace("&", " AND ").replace("N.C.", "NC")
+    s = s.replace("(OH)", " OH ").replace("(FL)", " FL ")
+    s = re.sub(r'\(.*?\)', '', s)
+
+    # Standardize common acronyms & abbreviations cleanly
+    s = re.sub(r'\bCENT\b\.?', 'CENTRAL', s)
+    s = re.sub(r'\bCONN\b\.?', 'CONNECTICUT', s)
+    s = re.sub(r'\bST\b\.?', 'STATE', s)
+    s = re.sub(r'\bUCONN\b', 'CONNECTICUT', s)
+    s = re.sub(r'\bCCSU\b', 'CENTRAL CONNECTICUT', s)
+    s = re.sub(r'\bPENNSYLVANIA\b', 'PENN', s)
+    s = re.sub(r'\bUMKC\b', 'KANSAS CITY', s)
+    s = re.sub(r'\bUTRGV\b', 'UT RIO GRANDE VALLEY', s)
+    s = re.sub(r'\bSIUE\b', 'SIU EDWARDSVILLE', s)
+    s = re.sub(r'\bULM\b', 'LOUISIANA MONROE', s)
+    s = re.sub(r'\bULL\b', 'LOUISIANA', s)
+    s = re.sub(r'\bIUPUI\b', 'IU INDIANAPOLIS', s)
+    s = re.sub(r'\bIU INDY\b', 'IU INDIANAPOLIS', s)
+    s = re.sub(r'\bPFW\b', 'PURDUE FORT WAYNE', s)
+
+    tokens = [t for t in re.findall(r'[A-Z0-9]+', s) if t not in ["THE", "OF", "AT", "UNIVERSITY", "MEN", "MENS", "BASKETBALL"]]
+    return set(tokens)
 
 def resolve_d1_team(raw_name, kp_df):
-    """
-    Strictly resolves a team against KenPom summary27.csv.
-    Returns None if the team is non-D1 (e.g. Southern Virginia, Howard Payne),
-    preventing phantom games.
-    """
     raw_str = str(raw_name).strip()
     raw_upper = raw_str.upper()
 
-    # 1. Direct explicit alias check
+    # 1. Canonical alias match
     if raw_upper in EXPLICIT_KENPOM_MAP:
-        target = EXPLICIT_KENPOM_MAP[raw_upper]
-        if target in kp_df["TeamName"].values:
-            return target
+        cand = EXPLICIT_KENPOM_MAP[raw_upper]
+        if cand in kp_df["TeamName"].values:
+            return cand
+        if cand.endswith(" St.") and cand[:-4] in kp_df["TeamName"].values:
+            return cand[:-4]
+        if not cand.endswith(" St.") and (cand + " St.") in kp_df["TeamName"].values:
+            return cand + " St."
 
-    # 2. Exact match in KenPom
+    # 2. Direct string match
     if raw_str in kp_df["TeamName"].values:
         return raw_str
 
     raw_tokens = clean_name_tokens(raw_str)
     best_match = None
 
-    # 3. Guarded token match against real D1 teams
+    # 3. Guarded token resolution
     for kp_name in kp_df["TeamName"].unique():
         kp_tokens = clean_name_tokens(kp_name)
 
-        # Disallow mismatch on STATE (e.g. Penn vs Penn St, Iowa vs Iowa St)
+        # Disallow mismatch on STATE (Penn vs Penn State)
         if ("STATE" in raw_tokens) != ("STATE" in kp_tokens):
             continue
 
-        # Strict directional guards (reject Southern Virginia matching Virginia)
-        if "SOUTHERN" in raw_tokens and "SOUTHERN" not in kp_tokens:
-            continue
-        if "WESTERN" in raw_tokens and "WESTERN" not in kp_tokens:
-            continue
-        if "EASTERN" in raw_tokens and "EASTERN" not in kp_tokens:
-            continue
-        if "NORTHERN" in raw_tokens and "NORTHERN" not in kp_tokens:
-            continue
-        if "CENTRAL" in raw_tokens and "CENTRAL" not in kp_tokens:
+        # Disallow mismatch on TECH (Georgia vs Georgia Tech)
+        if ("TECH" in raw_tokens) != ("TECH" in kp_tokens):
             continue
 
-        # Check full subset containment
-        if kp_tokens.issubset(raw_tokens) or raw_tokens.issubset(kp_tokens):
-            if best_match is None or len(kp_tokens) > len(clean_name_tokens(best_match)):
-                best_match = kp_name
+        # Strict directional parity (Central Conn vs Connecticut)
+        raw_dirs = raw_tokens.intersection(DIRECTIONALS)
+        kp_dirs = kp_tokens.intersection(DIRECTIONALS)
+        if raw_dirs != kp_dirs:
+            continue
+
+        # Core overlap verification
+        core_raw = raw_tokens - DIRECTIONALS - {"STATE", "TECH"}
+        core_kp = kp_tokens - DIRECTIONALS - {"STATE", "TECH"}
+
+        if core_raw and core_kp:
+            if core_raw.issubset(core_kp) or core_kp.issubset(core_raw) or core_raw.intersection(core_kp):
+                if best_match is None or len(kp_tokens) > len(clean_name_tokens(best_match)):
+                    best_match = kp_name
 
     return best_match
 
@@ -266,9 +449,7 @@ with tab2:
 
         date_str = slate_date.strftime("%Y%m%d")
 
-        # ---------------------------------------------------------
-        # 1. LIVE ESPN SCHEDULE FETCH WITH STRICT D1 FILTER
-        # ---------------------------------------------------------
+        # 1. LIVE ESPN SCHEDULE FETCH WITH STRICT D1 RESOLVER
         schedule_events = []
         schedule_labels = {}
 
@@ -285,7 +466,6 @@ with tab2:
                 home_kp = resolve_d1_team(home_raw, kp_df)
                 away_kp = resolve_d1_team(away_raw, kp_df)
 
-                # Strict reject: drop game if either school is non-D1
                 if not home_kp or not away_kp:
                     continue
 
@@ -299,9 +479,7 @@ with tab2:
         except Exception as e:
             st.warning(f"ESPN schedule fetch notice: {str(e)}")
 
-        # ---------------------------------------------------------
         # 2. MATCHUP EFFICIENCY & MARGIN PROJECTIONS
-        # ---------------------------------------------------------
         D1_AVG_TEMPO = 71.37
         D1_AVG_EFF = 104.55
         SPREAD_SIGMA = 10.5
@@ -360,9 +538,7 @@ with tab2:
 
         proj_df = pd.DataFrame(projected_rows)
 
-        # ---------------------------------------------------------
-        # 3. LIVE MULTI-BOOK EXTRACTION & EV CALCULATION
-        # ---------------------------------------------------------
+        # 3. LIVE MULTI-BOOK EXTRACTION ENGINE
         book_key_map = {
             "fanduel": "FanDuel",
             "draftkings": "DraftKings",
@@ -371,31 +547,46 @@ with tab2:
             "espnbet": "theScore Bet"
         }
 
-        def get_game_market_odds(h_name, a_name):
+        def match_team_tokens(source_name, target_name):
+            tok_a = clean_name_tokens(source_name)
+            tok_b = clean_name_tokens(target_name)
+
+            if ("STATE" in tok_a) != ("STATE" in tok_b):
+                return False
+            if ("TECH" in tok_a) != ("TECH" in tok_b):
+                return False
+            if tok_a.intersection(DIRECTIONALS) != tok_b.intersection(DIRECTIONALS):
+                return False
+
+            core_a = tok_a - DIRECTIONALS - {"STATE", "TECH"}
+            core_b = tok_b - DIRECTIONALS - {"STATE", "TECH"}
+            return bool(core_a.intersection(core_b))
+
+        def get_game_market_odds(h_name, a_name, target_team=None):
             if not st.session_state["cbb_odds_cache"]:
                 return None
 
-            h_tokens = clean_name_tokens(h_name)
-            a_tokens = clean_name_tokens(a_name)
-
             best_match_game = None
             for g in st.session_state["cbb_odds_cache"]:
-                gh_tok = clean_name_tokens(g.get("home_team", ""))
-                ga_tok = clean_name_tokens(g.get("away_team", ""))
+                api_home = g.get("home_team", "")
+                api_away = g.get("away_team", "")
 
-                # Strict requirement: both teams must overlap with the cached game
-                if len(h_tokens.intersection(gh_tok)) >= 1 and len(a_tokens.intersection(ga_tok)) >= 1:
+                direct_match = match_team_tokens(h_name, api_home) and match_team_tokens(a_name, api_away)
+                inverted_match = match_team_tokens(h_name, api_away) and match_team_tokens(a_name, api_home)
+
+                if direct_match or inverted_match:
                     best_match_game = g
                     break
 
             if not best_match_game:
                 return None
 
-            best_spread = None   # (point, price, book_name)
-            best_ml = None       # (price, book_name)
-            best_total = None    # (point, price, book_name)
+            best_spread = None
+            best_ml = None
+            best_total = None
 
             req_book = target_book_filter.lower().replace(" ", "")
+            eval_target = target_team if target_team else h_name
 
             for bm in best_match_game.get("bookmakers", []):
                 bm_key = bm.get("key", "").lower()
@@ -411,14 +602,14 @@ with tab2:
                     if mk == "h2h":
                         for o in outs:
                             p = o.get("price")
-                            if len(h_tokens.intersection(clean_name_tokens(o.get("name")))) >= 1:
+                            if match_team_tokens(eval_target, o.get("name")):
                                 if best_ml is None or p > best_ml[0]:
                                     best_ml = (p, book_disp)
                     elif mk == "spreads":
                         for o in outs:
                             pt = o.get("point")
                             pr = o.get("price", -110)
-                            if len(h_tokens.intersection(clean_name_tokens(o.get("name")))) >= 1:
+                            if match_team_tokens(eval_target, o.get("name")):
                                 if best_spread is None or pt > best_spread[0] or (pt == best_spread[0] and pr > best_spread[1]):
                                     best_spread = (pt, pr, book_disp)
                     elif mk == "totals":
@@ -435,22 +626,14 @@ with tab2:
                 "total": best_total
             }
 
-        # ---------------------------------------------------------
         # 4. MATRIX FORMATTING & AUTOMATIC VALUE FILTERING
-        # ---------------------------------------------------------
         if not proj_df.empty:
             proj_df = proj_df[proj_df["Fair_Spread"].abs() <= max_spread_filter].copy()
 
-            if st.session_state["cbb_odds_cache"]:
-                odds_data = [get_game_market_odds(r["Home_Team"], r["Away_Team"]) for _, r in proj_df.iterrows()]
-            else:
-                odds_data = [None] * len(proj_df)
-
             processed_rows = []
             for idx, r in proj_df.iterrows():
-                o_dict = odds_data[idx] if idx < len(odds_data) else None
-
                 if selected_market == "Spread (Cover)":
+                    o_dict = get_game_market_odds(r["Home_Team"], r["Away_Team"], target_team=r["Home_Team"])
                     b_pt, b_pr, b_name = (None, None, "FanDuel")
                     if o_dict and o_dict.get("spread"):
                         b_pt, b_pr, b_name = o_dict["spread"]
@@ -479,10 +662,6 @@ with tab2:
                     })
 
                 elif selected_market == "Moneyline (Win)":
-                    b_pr, b_name = (None, "FanDuel")
-                    if o_dict and o_dict.get("ml"):
-                        b_pr, b_name = o_dict["ml"]
-
                     is_home_fav = r["Home_Win_Prob_%"] >= 50.0
                     fav_team = r["Home_Team"] if is_home_fav else r["Away_Team"]
                     win_prob = r["Home_Win_Prob_%"] if is_home_fav else r["Away_Win_Prob_%"]
@@ -490,6 +669,11 @@ with tab2:
 
                     if fair_ml < -450:
                         continue
+
+                    o_dict = get_game_market_odds(r["Home_Team"], r["Away_Team"], target_team=fav_team)
+                    b_pr, b_name = (None, "FanDuel")
+                    if o_dict and o_dict.get("ml"):
+                        b_pr, b_name = o_dict["ml"]
 
                     implied_pct = american_to_implied(b_pr) * 100.0 if b_pr else (american_to_implied(fair_ml) * 100.0)
                     edge_pct = round(win_prob - implied_pct, 1) if b_pr is not None else 0.0
@@ -509,6 +693,7 @@ with tab2:
                     })
 
                 else:  # Game Total (Over)
+                    o_dict = get_game_market_odds(r["Home_Team"], r["Away_Team"])
                     b_pt, b_pr, b_name = (None, None, "FanDuel")
                     if o_dict and o_dict.get("total"):
                         b_pt, b_pr, b_name = o_dict["total"]
@@ -695,9 +880,7 @@ with tab1:
             st.session_state["cbb_bet_slip"][idx]["Line"] = row["Line"]
             st.session_state["cbb_bet_slip"][idx]["Nexus Odds (+/-)"] = row["Nexus Odds (+/-)"]
 
-        # ---------------------------------------------------------
         # LIVE DYNAMIC EDGE EVALUATION
-        # ---------------------------------------------------------
         st.markdown("### 📈 Live Edge Evaluation:")
         edge_data = []
 
@@ -712,7 +895,6 @@ with tab1:
             proj_margin = row.get("Proj_Margin", 0.0)
             fair_total = row.get("Fair_Total", 140.0)
 
-            # Recalculate model prob dynamically based on line typed
             if "Spread" in market and user_line is not None and pd.notna(user_line):
                 z = (float(proj_margin) - (-float(user_line))) / 10.5
                 model_prob = round(norm.cdf(z) * 100.0, 1)
@@ -753,9 +935,7 @@ with tab1:
         else:
             st.info("Enter lines and Nexus Odds in the table above to calculate edges for your checked games.")
 
-        # ---------------------------------------------------------
         # LIVE COMPOUND SLIP & PROFIT BOOST CALCULATOR
-        # ---------------------------------------------------------
         st.markdown("### 🚀 Live Compound Slip & Profit Boost Calculator")
         c1, c2, c3, c4 = st.columns(4)
 
