@@ -111,7 +111,16 @@ tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix
 # MASTER CANONICAL D1 ALIAS MAP & RESOLUTION ENGINE
 # -------------------------------------------------------------
 EXPLICIT_KENPOM_MAP = {
-    # LIU / Long Island split
+    # Jacksonville vs Jacksonville State
+    "JACKSONVILLE": "Jacksonville",
+    "JACKSONVILLE DOLPHINS": "Jacksonville",
+    "JACKSONVILLE STATE": "Jacksonville St.",
+    "JACKSONVILLE ST": "Jacksonville St.",
+    "JACKSONVILLE ST.": "Jacksonville St.",
+    "JAX STATE": "Jacksonville St.",
+    "JSU": "Jacksonville St.",
+
+    # LIU / Long Island vs Rhode Island
     "LIU": "LIU",
     "LONG ISLAND": "LIU",
     "LONG ISLAND UNIVERSITY": "LIU",
@@ -339,9 +348,10 @@ DIRECTIONALS = {
     "NORTHERN", "SOUTHERN", "EASTERN", "WESTERN", "MIDDLE"
 }
 
+# STATE and TECH are intentionally EXCLUDED from stop words to protect qualifiers
 GENERIC_STOP_WORDS = {
-    "THE", "OF", "AT", "UNIVERSITY", "COLLEGE", "STATE", "TECH", 
-    "ISLAND", "CITY", "VALLEY", "COAST", "MEN", "MENS", "BASKETBALL"
+    "THE", "OF", "AT", "UNIVERSITY", "COLLEGE",
+    "MEN", "MENS", "BASKETBALL"
 }
 
 def clean_name_tokens(name):
@@ -390,7 +400,7 @@ def resolve_d1_team(raw_name, kp_df):
         if not cand.endswith(" St.") and (cand + " St.") in kp_df["TeamName"].values:
             return cand + " St."
 
-    # 2. Direct string match
+    # 2. Direct string match in KenPom
     if raw_str in kp_df["TeamName"].values:
         return raw_str
 
@@ -406,22 +416,28 @@ def resolve_d1_team(raw_name, kp_df):
         if not kp_tokens:
             continue
 
-        # Strict directional parity (North Texas != Texas)
+        # Enforce STATE parity (Jacksonville != Jacksonville St; Penn != Penn St)
+        if ("STATE" in raw_tokens) != ("STATE" in kp_tokens):
+            continue
+
+        # Enforce TECH parity (Georgia != Georgia Tech)
+        if ("TECH" in raw_tokens) != ("TECH" in kp_tokens):
+            continue
+
+        # Enforce strict directional parity (North Texas != Texas)
         raw_dirs = raw_tokens.intersection(DIRECTIONALS)
         kp_dirs = kp_tokens.intersection(DIRECTIONALS)
         if raw_dirs != kp_dirs:
             continue
 
-        core_raw = raw_tokens - DIRECTIONALS
-        core_kp = kp_tokens - DIRECTIONALS
+        core_raw = raw_tokens - DIRECTIONALS - {"STATE", "TECH"}
+        core_kp = kp_tokens - DIRECTIONALS - {"STATE", "TECH"}
 
         if not core_raw or not core_kp:
             continue
 
-        # Reject non-D1 teams that have distinct proper nouns (e.g. Wesleyan, Biblical, Monticello)
-        # Any candidate must share the primary root
+        # Reject non-D1 teams that have distinct proper nouns (Wesleyan, Biblical, Monticello, Lynchburg)
         if core_raw == core_kp or core_kp.issubset(core_raw):
-            # If raw has extra words, verify they aren't un-matched school names
             extra_words = core_raw - core_kp
             known_mascots = {"HAWKS", "WILDCATS", "BULLDOGS", "TIGERS", "EAGLES", "PANTHERS", "BEARS", "PIRATES", "BLUE", "RED", "GOLDEN"}
             if extra_words and not extra_words.issubset(known_mascots):
@@ -483,13 +499,13 @@ with tab2:
                 key="cbb_target_book_filter"
             )
         with c3:
-            # Anchor to Eastern Time so UTC servers don't prematurely flip dates at 7:00 PM EST
+            # Anchor strictly to US/Eastern date to avoid 7:00 PM EST UTC server rollover
             eastern_today = pd.Timestamp.now(tz="US/Eastern").date()
             slate_date = st.date_input("Target Slate Date", value=eastern_today, key="cbb_slate_date")
 
         date_str = slate_date.strftime("%Y%m%d")
 
-        # 1. LIVE ESPN SCHEDULE FETCH WITH ACCURATE HOME/AWAY AND START TIMES
+        # 1. LIVE ESPN SCHEDULE FETCH (STRICT D1 + PROPER HOME/AWAY + CHRONOLOGICAL SORT)
         schedule_events = []
         schedule_labels = {}
 
@@ -501,7 +517,6 @@ with tab2:
                 competitors = comp["competitors"]
                 neutral = comp.get("neutralSite", False)
 
-                # Parse tip-off time in Eastern Time
                 raw_date = event.get("date")
                 start_dt = None
                 tip_display = ""
@@ -515,7 +530,6 @@ with tab2:
                     except:
                         pass
 
-                # Strict homeAway evaluation
                 home_raw, away_raw = None, None
                 for c in competitors:
                     t_name = (
@@ -536,7 +550,8 @@ with tab2:
                 home_kp = resolve_d1_team(home_raw, kp_df)
                 away_kp = resolve_d1_team(away_raw, kp_df)
 
-                # Strict D1 guard: both teams MUST resolve to valid KenPom D1 programs
+                # Strict D1 guard: BOTH teams must resolve to an authentic D1 KenPom team.
+                # Non-D1 opponents are dropped immediately.
                 if not home_kp or not away_kp:
                     continue
 
@@ -627,11 +642,15 @@ with tab2:
             tok_a = clean_name_tokens(source_name)
             tok_b = clean_name_tokens(target_name)
 
+            if ("STATE" in tok_a) != ("STATE" in tok_b):
+                return False
+            if ("TECH" in tok_a) != ("TECH" in tok_b):
+                return False
             if tok_a.intersection(DIRECTIONALS) != tok_b.intersection(DIRECTIONALS):
                 return False
 
-            core_a = tok_a - DIRECTIONALS
-            core_b = tok_b - DIRECTIONALS
+            core_a = tok_a - DIRECTIONALS - {"STATE", "TECH"}
+            core_b = tok_b - DIRECTIONALS - {"STATE", "TECH"}
             return bool(core_a.intersection(core_b))
 
         def get_game_market_odds(h_name, a_name, target_team=None):
@@ -805,7 +824,6 @@ with tab2:
                 sort_col = "Edge_%" if "Edge_%" in matrix_df.columns else "EV_Edge_%"
                 matrix_df = matrix_df.sort_values(by=sort_col, ascending=False).reset_index(drop=True)
 
-                # Chronological ordering for matchup multiselect options
                 sorted_by_time = matrix_df.sort_values(by="Start_Time_DT", ascending=True)
                 all_tags = sorted_by_time["Tag"].drop_duplicates().tolist()
 
