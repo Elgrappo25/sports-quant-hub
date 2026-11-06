@@ -299,7 +299,10 @@ EXPLICIT_KENPOM_MAP = {
     "SAINT LOUIS": "Saint Louis",
     "ST. LOUIS": "Saint Louis",
 
-    # Miscellaneous D1 Teams
+    # Boston / Prairie View & Others
+    "BOSTON COLLEGE": "Boston College",
+    "PRAIRIE VIEW": "Prairie View A&M",
+    "PRAIRIE VIEW A&M": "Prairie View A&M",
     "SMU": "SMU",
     "BYU": "BYU",
     "TCU": "TCU",
@@ -462,11 +465,13 @@ with tab2:
                 key="cbb_target_book_filter"
             )
         with c3:
-            slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="cbb_slate_date")
+            # Anchor to Eastern Time so UTC servers don't prematurely flip dates at 7:00 PM EST
+            eastern_today = pd.Timestamp.now(tz="US/Eastern").date()
+            slate_date = st.date_input("Target Slate Date", value=eastern_today, key="cbb_slate_date")
 
         date_str = slate_date.strftime("%Y%m%d")
 
-        # 1. LIVE ESPN SCHEDULE FETCH WITH LOCATION & DISPLAYNAME PARSING
+        # 1. LIVE ESPN SCHEDULE FETCH WITH ACCURATE HOME/AWAY AND START TIMES
         schedule_events = []
         schedule_labels = {}
 
@@ -476,19 +481,39 @@ with tab2:
             for event in res.get("events", []):
                 comp = event["competitions"][0]
                 competitors = comp["competitors"]
-
-                # Extract location first (e.g. "Northern Illinois"), then displayName, then shortDisplayName
-                home_raw = (
-                    competitors[0]["team"].get("location")
-                    or competitors[0]["team"].get("displayName")
-                    or competitors[0]["team"].get("shortDisplayName")
-                )
-                away_raw = (
-                    competitors[1]["team"].get("location")
-                    or competitors[1]["team"].get("displayName")
-                    or competitors[1]["team"].get("shortDisplayName")
-                )
                 neutral = comp.get("neutralSite", False)
+
+                # Parse tip-off time in Eastern Time
+                raw_date = event.get("date")
+                start_dt = None
+                tip_display = ""
+                if raw_date:
+                    try:
+                        dt = pd.to_datetime(raw_date)
+                        if dt.tzinfo is None:
+                            dt = dt.tz_localize("UTC")
+                        start_dt = dt.tz_convert("US/Eastern")
+                        tip_display = start_dt.strftime("%I:%M %p").lstrip("0") + " EST"
+                    except:
+                        pass
+
+                # Strict homeAway evaluation
+                home_raw, away_raw = None, None
+                for c in competitors:
+                    t_name = (
+                        c.get("team", {}).get("location")
+                        or c.get("team", {}).get("displayName")
+                        or c.get("team", {}).get("shortDisplayName")
+                    )
+                    if c.get("homeAway") == "home":
+                        home_raw = t_name
+                    elif c.get("homeAway") == "away":
+                        away_raw = t_name
+
+                if not home_raw and len(competitors) > 0:
+                    home_raw = competitors[0].get("team", {}).get("location") or competitors[0].get("team", {}).get("displayName")
+                if not away_raw and len(competitors) > 1:
+                    away_raw = competitors[1].get("team", {}).get("location") or competitors[1].get("team", {}).get("displayName")
 
                 home_kp = resolve_d1_team(home_raw, kp_df)
                 away_kp = resolve_d1_team(away_raw, kp_df)
@@ -501,7 +526,9 @@ with tab2:
                     "tag": tag,
                     "away": away_kp,
                     "home": home_kp,
-                    "neutral": neutral
+                    "neutral": neutral,
+                    "start_dt": start_dt if start_dt is not None else pd.Timestamp.max,
+                    "tip_display": tip_display
                 })
         except Exception as e:
             st.warning(f"ESPN schedule fetch notice: {str(e)}")
@@ -543,7 +570,8 @@ with tab2:
             fair_away_ml = prob_to_american(away_win_prob)
 
             icon = "🔥" if proj_total >= 152.0 else "⚡" if proj_pace >= 73.0 else "🧊" if proj_pace <= 66.0 else ""
-            display_tag = f"{g['tag']} [{fair_total} {icon}]".strip()
+            time_prefix = f"[{g['tip_display']}] " if g['tip_display'] else ""
+            display_tag = f"{time_prefix}{g['tag']} [{fair_total} {icon}]".strip()
             schedule_labels[g['tag']] = display_tag
 
             projected_rows.append({
@@ -551,6 +579,8 @@ with tab2:
                 "Away_Team": g["away"],
                 "Home_Team": g["home"],
                 "Neutral": g["neutral"],
+                "Start_Time_DT": g["start_dt"],
+                "Tip_Off": g["tip_display"],
                 "Proj_Pace": round(proj_pace, 1),
                 "Away_Proj_Pts": round(a_proj_pts, 1),
                 "Home_Proj_Pts": round(h_proj_pts, 1),
@@ -676,6 +706,8 @@ with tab2:
                     processed_rows.append({
                         "Selection": f"{r['Home_Team']} {target_spread}",
                         "Tag": r["Tag"],
+                        "Tip_Off": r["Tip_Off"],
+                        "Start_Time_DT": r["Start_Time_DT"],
                         "Best_Book": b_name,
                         "Book_Spread": b_pt if b_pt is not None else "Sync Odds",
                         "Fair_Spread": r["Fair_Spread"],
@@ -708,6 +740,8 @@ with tab2:
                     processed_rows.append({
                         "Selection": f"{fav_team} ML",
                         "Tag": r["Tag"],
+                        "Tip_Off": r["Tip_Off"],
+                        "Start_Time_DT": r["Start_Time_DT"],
                         "Best_Book": b_name,
                         "Book_ML": f"{b_pr:+d}" if b_pr is not None else "Sync Odds",
                         "Fair_ML": fair_ml,
@@ -736,6 +770,8 @@ with tab2:
                     processed_rows.append({
                         "Selection": f"Over {target_total}",
                         "Tag": r["Tag"],
+                        "Tip_Off": r["Tip_Off"],
+                        "Start_Time_DT": r["Start_Time_DT"],
                         "Best_Book": b_name,
                         "Book_Total": b_pt if b_pt is not None else "Sync Odds",
                         "Fair_Total": r["Fair_Total"],
@@ -754,7 +790,10 @@ with tab2:
                 sort_col = "Edge_%" if "Edge_%" in matrix_df.columns else "EV_Edge_%"
                 matrix_df = matrix_df.sort_values(by=sort_col, ascending=False).reset_index(drop=True)
 
-                all_tags = matrix_df["Tag"].tolist()
+                # Chronological ordering for matchup multiselect options
+                sorted_by_time = matrix_df.sort_values(by="Start_Time_DT", ascending=True)
+                all_tags = sorted_by_time["Tag"].drop_duplicates().tolist()
+
                 saved_key = f"cbb_saved_pairs_{date_str}"
                 init_flag_key = f"cbb_slate_init_{date_str}"
                 widget_key = f"cbb_pairs_widget_{date_str}"
@@ -769,7 +808,7 @@ with tab2:
                 st.session_state[widget_key] = [t for t in st.session_state[widget_key] if t in all_tags]
 
                 selected_matchups = st.multiselect(
-                    "🎯 Filter Matchups (Excludes Blowouts > Max Spread)",
+                    "🎯 Filter Matchups (Excludes Blowouts > Max Spread - Sorted by Tip-Off)",
                     options=all_tags,
                     format_func=lambda x: schedule_labels.get(x, x),
                     key=widget_key
@@ -780,7 +819,7 @@ with tab2:
 
                 st.markdown(f"### 📈 Slate Projections & Edge Matrix ({selected_market}):")
 
-                display_cols = [c for c in filtered_matrix.columns if c not in ["Line", "Odds", "Proj_Margin", "Fair_Total_Val"]]
+                display_cols = [c for c in filtered_matrix.columns if c not in ["Line", "Odds", "Proj_Margin", "Fair_Total_Val", "Start_Time_DT"]]
                 display_table = filtered_matrix[display_cols].copy()
                 display_table.insert(0, "Select", False)
 
