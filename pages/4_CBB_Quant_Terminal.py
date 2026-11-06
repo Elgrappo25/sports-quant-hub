@@ -111,7 +111,31 @@ tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix
 # MASTER CANONICAL D1 ALIAS MAP & RESOLUTION ENGINE
 # -------------------------------------------------------------
 EXPLICIT_KENPOM_MAP = {
-    # Connecticut split
+    # Illinois splits
+    "NORTHERN ILLINOIS": "Northern Illinois",
+    "N ILLINOIS": "Northern Illinois",
+    "N. ILLINOIS": "Northern Illinois",
+    "NIU": "Northern Illinois",
+    "ILLINOIS CHICAGO": "Illinois Chicago",
+    "UIC": "Illinois Chicago",
+    "SOUTHERN ILLINOIS": "Southern Illinois",
+    "S ILLINOIS": "Southern Illinois",
+    "S. ILLINOIS": "Southern Illinois",
+    "SIU": "Southern Illinois",
+    "EASTERN ILLINOIS": "Eastern Illinois",
+    "E ILLINOIS": "Eastern Illinois",
+    "E. ILLINOIS": "Eastern Illinois",
+    "EIU": "Eastern Illinois",
+    "WESTERN ILLINOIS": "Western Illinois",
+    "W ILLINOIS": "Western Illinois",
+    "W. ILLINOIS": "Western Illinois",
+    "WIU": "Western Illinois",
+    "ILLINOIS STATE": "Illinois St.",
+    "ILLINOIS ST": "Illinois St.",
+    "ILLINOIS ST.": "Illinois St.",
+    "ILLINOIS": "Illinois",
+
+    # Connecticut splits
     "CENTRAL CONNECTICUT": "Central Connecticut",
     "CENTRAL CONNECTICUT STATE": "Central Connecticut",
     "CENTRAL CONN": "Central Connecticut",
@@ -197,24 +221,10 @@ EXPLICIT_KENPOM_MAP = {
     "NEW ORLEANS": "New Orleans",
     "UNO": "New Orleans",
 
-    # Illinois / Indiana / Missouri
+    # Indiana / Missouri
     "SIU EDWARDSVILLE": "SIUE",
     "SIU-EDWARDSVILLE": "SIUE",
     "SIUE": "SIUE",
-    "SOUTHERN ILLINOIS": "Southern Illinois",
-    "SIU": "Southern Illinois",
-    "ILLINOIS CHICAGO": "Illinois Chicago",
-    "UIC": "Illinois Chicago",
-    "ILLINOIS STATE": "Illinois St.",
-    "ILLINOIS": "Illinois",
-    "LOYOLA CHICAGO": "Loyola Chicago",
-    "LOYOLA (IL)": "Loyola Chicago",
-    "LOYOLA IL": "Loyola Chicago",
-    "LOYOLA MARYLAND": "Loyola MD",
-    "LOYOLA (MD)": "Loyola MD",
-    "LOYOLA MD": "Loyola MD",
-    "LOYOLA MARYMOUNT": "Loyola Marymount",
-    "LMU": "Loyola Marymount",
     "IU INDY": "IU Indianapolis",
     "IUPUI": "IU Indianapolis",
     "IU INDIANAPOLIS": "IU Indianapolis",
@@ -224,7 +234,7 @@ EXPLICIT_KENPOM_MAP = {
     "KANSAS CITY": "Kansas City",
     "UMKC": "Kansas City",
 
-    # Nebraska / Minnesota / Dakotas
+    # Nebraska / Minnesota
     "OMAHA": "Omaha",
     "NEBRASKA OMAHA": "Omaha",
     "NEB. OMAHA": "Omaha",
@@ -235,7 +245,7 @@ EXPLICIT_KENPOM_MAP = {
     "ST. THOMAS-MINNESOTA": "St. Thomas",
     "SAINT THOMAS": "St. Thomas",
 
-    # North Carolina / South Carolina / Virginia
+    # Carolinas & Virginia
     "NC STATE": "N.C. State",
     "N.C. STATE": "N.C. State",
     "NORTH CAROLINA STATE": "N.C. State",
@@ -258,7 +268,7 @@ EXPLICIT_KENPOM_MAP = {
     "VIRGINIA TECH": "Virginia Tech",
     "VMI": "VMI",
 
-    # Mississippi / Alabama
+    # Mississippi & Alabama
     "OLE MISS": "Mississippi",
     "MISSISSIPPI": "Mississippi",
     "MISSISSIPPI STATE": "Mississippi St.",
@@ -267,7 +277,7 @@ EXPLICIT_KENPOM_MAP = {
     "SOUTHERN MISSISSIPPI": "Southern Miss",
     "USM": "Southern Miss",
 
-    # Miami & Ohio
+    # Miami splits
     "MIAMI FL": "Miami FL",
     "MIAMI (FL)": "Miami FL",
     "MIAMI": "Miami FL",
@@ -289,7 +299,7 @@ EXPLICIT_KENPOM_MAP = {
     "SAINT LOUIS": "Saint Louis",
     "ST. LOUIS": "Saint Louis",
 
-    # Other D1 Acronyms & Quirks
+    # Miscellaneous D1 Teams
     "SMU": "SMU",
     "BYU": "BYU",
     "TCU": "TCU",
@@ -325,12 +335,19 @@ def clean_name_tokens(name):
     s = s.replace("(OH)", " OH ").replace("(FL)", " FL ")
     s = re.sub(r'\(.*?\)', '', s)
 
-    # Standardize common acronyms & abbreviations cleanly
+    # Standardize directionals & common abbreviations
+    s = re.sub(r'\bN\b\.?', 'NORTHERN', s)
+    s = re.sub(r'\bS\b\.?', 'SOUTHERN', s)
+    s = re.sub(r'\bE\b\.?', 'EASTERN', s)
+    s = re.sub(r'\bW\b\.?', 'WESTERN', s)
     s = re.sub(r'\bCENT\b\.?', 'CENTRAL', s)
     s = re.sub(r'\bCONN\b\.?', 'CONNECTICUT', s)
     s = re.sub(r'\bST\b\.?', 'STATE', s)
     s = re.sub(r'\bUCONN\b', 'CONNECTICUT', s)
     s = re.sub(r'\bCCSU\b', 'CENTRAL CONNECTICUT', s)
+    s = re.sub(r'\bNIU\b', 'NORTHERN ILLINOIS', s)
+    s = re.sub(r'\bUIC\b', 'ILLINOIS CHICAGO', s)
+    s = re.sub(r'\bSIU\b', 'SOUTHERN ILLINOIS', s)
     s = re.sub(r'\bPENNSYLVANIA\b', 'PENN', s)
     s = re.sub(r'\bUMKC\b', 'KANSAS CITY', s)
     s = re.sub(r'\bUTRGV\b', 'UT RIO GRANDE VALLEY', s)
@@ -377,7 +394,7 @@ def resolve_d1_team(raw_name, kp_df):
         if ("TECH" in raw_tokens) != ("TECH" in kp_tokens):
             continue
 
-        # Strict directional parity (Central Conn vs Connecticut)
+        # Strict directional parity
         raw_dirs = raw_tokens.intersection(DIRECTIONALS)
         kp_dirs = kp_tokens.intersection(DIRECTIONALS)
         if raw_dirs != kp_dirs:
@@ -449,7 +466,7 @@ with tab2:
 
         date_str = slate_date.strftime("%Y%m%d")
 
-        # 1. LIVE ESPN SCHEDULE FETCH WITH STRICT D1 RESOLVER
+        # 1. LIVE ESPN SCHEDULE FETCH WITH LOCATION & DISPLAYNAME PARSING
         schedule_events = []
         schedule_labels = {}
 
@@ -459,8 +476,18 @@ with tab2:
             for event in res.get("events", []):
                 comp = event["competitions"][0]
                 competitors = comp["competitors"]
-                home_raw = competitors[0]["team"]["shortDisplayName"]
-                away_raw = competitors[1]["team"]["shortDisplayName"]
+
+                # Extract location first (e.g. "Northern Illinois"), then displayName, then shortDisplayName
+                home_raw = (
+                    competitors[0]["team"].get("location")
+                    or competitors[0]["team"].get("displayName")
+                    or competitors[0]["team"].get("shortDisplayName")
+                )
+                away_raw = (
+                    competitors[1]["team"].get("location")
+                    or competitors[1]["team"].get("displayName")
+                    or competitors[1]["team"].get("shortDisplayName")
+                )
                 neutral = comp.get("neutralSite", False)
 
                 home_kp = resolve_d1_team(home_raw, kp_df)
