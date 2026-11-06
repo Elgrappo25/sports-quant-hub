@@ -111,6 +111,13 @@ tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix
 # MASTER CANONICAL D1 ALIAS MAP & RESOLUTION ENGINE
 # -------------------------------------------------------------
 EXPLICIT_KENPOM_MAP = {
+    # LIU / Long Island split
+    "LIU": "LIU",
+    "LONG ISLAND": "LIU",
+    "LONG ISLAND UNIVERSITY": "LIU",
+    "LIU SHARKS": "LIU",
+    "RHODE ISLAND": "Rhode Island",
+
     # Illinois splits
     "NORTHERN ILLINOIS": "Northern Illinois",
     "N ILLINOIS": "Northern Illinois",
@@ -299,7 +306,7 @@ EXPLICIT_KENPOM_MAP = {
     "SAINT LOUIS": "Saint Louis",
     "ST. LOUIS": "Saint Louis",
 
-    # Boston / Prairie View & Others
+    # Other D1 Programs
     "BOSTON COLLEGE": "Boston College",
     "PRAIRIE VIEW": "Prairie View A&M",
     "PRAIRIE VIEW A&M": "Prairie View A&M",
@@ -332,6 +339,11 @@ DIRECTIONALS = {
     "NORTHERN", "SOUTHERN", "EASTERN", "WESTERN", "MIDDLE"
 }
 
+GENERIC_STOP_WORDS = {
+    "THE", "OF", "AT", "UNIVERSITY", "COLLEGE", "STATE", "TECH", 
+    "ISLAND", "CITY", "VALLEY", "COAST", "MEN", "MENS", "BASKETBALL"
+}
+
 def clean_name_tokens(name):
     s = str(name).upper().strip()
     s = s.replace("&", " AND ").replace("N.C.", "NC")
@@ -361,14 +373,14 @@ def clean_name_tokens(name):
     s = re.sub(r'\bIU INDY\b', 'IU INDIANAPOLIS', s)
     s = re.sub(r'\bPFW\b', 'PURDUE FORT WAYNE', s)
 
-    tokens = [t for t in re.findall(r'[A-Z0-9]+', s) if t not in ["THE", "OF", "AT", "UNIVERSITY", "MEN", "MENS", "BASKETBALL"]]
+    tokens = [t for t in re.findall(r'[A-Z0-9]+', s) if t not in GENERIC_STOP_WORDS]
     return set(tokens)
 
 def resolve_d1_team(raw_name, kp_df):
     raw_str = str(raw_name).strip()
     raw_upper = raw_str.upper()
 
-    # 1. Canonical alias match
+    # 1. Canonical alias dictionary lookup
     if raw_upper in EXPLICIT_KENPOM_MAP:
         cand = EXPLICIT_KENPOM_MAP[raw_upper]
         if cand in kp_df["TeamName"].values:
@@ -383,34 +395,40 @@ def resolve_d1_team(raw_name, kp_df):
         return raw_str
 
     raw_tokens = clean_name_tokens(raw_str)
+    if not raw_tokens:
+        return None
+
     best_match = None
 
     # 3. Guarded token resolution
     for kp_name in kp_df["TeamName"].unique():
         kp_tokens = clean_name_tokens(kp_name)
-
-        # Disallow mismatch on STATE (Penn vs Penn State)
-        if ("STATE" in raw_tokens) != ("STATE" in kp_tokens):
+        if not kp_tokens:
             continue
 
-        # Disallow mismatch on TECH (Georgia vs Georgia Tech)
-        if ("TECH" in raw_tokens) != ("TECH" in kp_tokens):
-            continue
-
-        # Strict directional parity
+        # Strict directional parity (North Texas != Texas)
         raw_dirs = raw_tokens.intersection(DIRECTIONALS)
         kp_dirs = kp_tokens.intersection(DIRECTIONALS)
         if raw_dirs != kp_dirs:
             continue
 
-        # Core overlap verification
-        core_raw = raw_tokens - DIRECTIONALS - {"STATE", "TECH"}
-        core_kp = kp_tokens - DIRECTIONALS - {"STATE", "TECH"}
+        core_raw = raw_tokens - DIRECTIONALS
+        core_kp = kp_tokens - DIRECTIONALS
 
-        if core_raw and core_kp:
-            if core_raw.issubset(core_kp) or core_kp.issubset(core_raw) or core_raw.intersection(core_kp):
-                if best_match is None or len(kp_tokens) > len(clean_name_tokens(best_match)):
-                    best_match = kp_name
+        if not core_raw or not core_kp:
+            continue
+
+        # Reject non-D1 teams that have distinct proper nouns (e.g. Wesleyan, Biblical, Monticello)
+        # Any candidate must share the primary root
+        if core_raw == core_kp or core_kp.issubset(core_raw):
+            # If raw has extra words, verify they aren't un-matched school names
+            extra_words = core_raw - core_kp
+            known_mascots = {"HAWKS", "WILDCATS", "BULLDOGS", "TIGERS", "EAGLES", "PANTHERS", "BEARS", "PIRATES", "BLUE", "RED", "GOLDEN"}
+            if extra_words and not extra_words.issubset(known_mascots):
+                continue
+
+            if best_match is None or len(kp_tokens) > len(clean_name_tokens(best_match)):
+                best_match = kp_name
 
     return best_match
 
@@ -518,6 +536,7 @@ with tab2:
                 home_kp = resolve_d1_team(home_raw, kp_df)
                 away_kp = resolve_d1_team(away_raw, kp_df)
 
+                # Strict D1 guard: both teams MUST resolve to valid KenPom D1 programs
                 if not home_kp or not away_kp:
                     continue
 
@@ -608,15 +627,11 @@ with tab2:
             tok_a = clean_name_tokens(source_name)
             tok_b = clean_name_tokens(target_name)
 
-            if ("STATE" in tok_a) != ("STATE" in tok_b):
-                return False
-            if ("TECH" in tok_a) != ("TECH" in tok_b):
-                return False
             if tok_a.intersection(DIRECTIONALS) != tok_b.intersection(DIRECTIONALS):
                 return False
 
-            core_a = tok_a - DIRECTIONALS - {"STATE", "TECH"}
-            core_b = tok_b - DIRECTIONALS - {"STATE", "TECH"}
+            core_a = tok_a - DIRECTIONALS
+            core_b = tok_b - DIRECTIONALS
             return bool(core_a.intersection(core_b))
 
         def get_game_market_odds(h_name, a_name, target_team=None):
