@@ -38,15 +38,12 @@ if "nhl_raw_t_base" not in st.session_state:
 if "nhl_raw_t_curr" not in st.session_state:
     st.session_state["nhl_raw_t_curr"] = None
 
-# Auto-Selector Engine Persistent Keys
-if "nhl_promo_preset" not in st.session_state:
-    st.session_state["nhl_promo_preset"] = "FanDuel (+100 Gate / 3-Leg Sweet Spot)"
-
+# Auto-Selector Engine Persistent Keys (Universal 70%-82% Sweet Spot)
 if "nhl_auto_min_prob" not in st.session_state:
-    st.session_state["nhl_auto_min_prob"] = 72.0
+    st.session_state["nhl_auto_min_prob"] = 70.0
 
 if "nhl_auto_max_prob" not in st.session_state:
-    st.session_state["nhl_auto_max_prob"] = 84.0
+    st.session_state["nhl_auto_max_prob"] = 82.0
 
 if "nhl_auto_legs_count" not in st.session_state:
     st.session_state["nhl_auto_legs_count"] = 3
@@ -87,45 +84,22 @@ profit_boost = st.sidebar.number_input(
 )
 
 # -------------------------------------------------------------
-# AUTO-SELECTOR ENGINE CONTROLS
+# STREAMLINED AUTO-SELECTOR ENGINE (UNIVERSAL DEFAULTS)
 # -------------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.header("⚡ Auto-Selector Engine")
 
-promo_presets = {
-    "FanDuel (+100 Gate / 3-Leg Sweet Spot)": {"min": 72.0, "max": 84.0, "legs": 3, "team": 1},
-    "BetMGM (-300 Gate / 2-Leg Floor)": {"min": 78.0, "max": 88.0, "legs": 2, "team": 1},
-    "BetMGM (+400 Gate / 3-Leg Longshot)": {"min": 58.0, "max": 68.0, "legs": 3, "team": 1},
-    "Custom / Manual Range": None
-}
-
-def apply_preset():
-    choice = st.session_state["nhl_promo_preset"]
-    if choice in promo_presets and promo_presets[choice] is not None:
-        cfg = promo_presets[choice]
-        st.session_state["nhl_auto_min_prob"] = float(cfg["min"])
-        st.session_state["nhl_auto_max_prob"] = float(cfg["max"])
-        st.session_state["nhl_auto_legs_count"] = int(cfg["legs"])
-        st.session_state["nhl_auto_max_team"] = int(cfg["team"])
-
-st.sidebar.selectbox(
-    "Promo Preset",
-    list(promo_presets.keys()),
-    key="nhl_promo_preset",
-    on_change=apply_preset
-)
-
 col_p1, col_p2 = st.sidebar.columns(2)
 with col_p1:
-    st.sidebar.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nhl_auto_min_prob")
+    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nhl_auto_min_prob")
 with col_p2:
-    st.sidebar.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nhl_auto_max_prob")
+    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nhl_auto_max_prob")
 
 col_l1, col_l2 = st.sidebar.columns(2)
 with col_l1:
-    st.sidebar.number_input("Target Leg Count", 1, 10, step=1, key="nhl_auto_legs_count")
+    st.number_input("Target Leg Count", 1, 10, step=1, key="nhl_auto_legs_count")
 with col_l2:
-    st.sidebar.number_input("Max Per Team", 1, 5, step=1, key="nhl_auto_max_team")
+    st.number_input("Max Per Team", 1, 5, step=1, key="nhl_auto_max_team")
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
