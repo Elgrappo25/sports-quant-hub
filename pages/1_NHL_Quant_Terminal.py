@@ -4,6 +4,7 @@ import numpy as np
 import requests
 import re
 from scipy.stats import poisson
+from modules.auto_selector import select_promo_legs
 
 st.set_page_config(page_title="NHL Quant Terminal", page_icon="🏒", layout="wide")
 
@@ -37,6 +38,22 @@ if "nhl_raw_t_base" not in st.session_state:
 if "nhl_raw_t_curr" not in st.session_state:
     st.session_state["nhl_raw_t_curr"] = None
 
+# Auto-Selector Engine Persistent Keys
+if "nhl_promo_preset" not in st.session_state:
+    st.session_state["nhl_promo_preset"] = "FanDuel (+100 Gate / 3-Leg Sweet Spot)"
+
+if "nhl_auto_min_prob" not in st.session_state:
+    st.session_state["nhl_auto_min_prob"] = 72.0
+
+if "nhl_auto_max_prob" not in st.session_state:
+    st.session_state["nhl_auto_max_prob"] = 84.0
+
+if "nhl_auto_legs_count" not in st.session_state:
+    st.session_state["nhl_auto_legs_count"] = 3
+
+if "nhl_auto_max_team" not in st.session_state:
+    st.session_state["nhl_auto_max_team"] = 1
+
 # -------------------------------------------------------------
 # SIDEBAR CONFIGURATION (PERSISTENT VIA KEYS)
 # -------------------------------------------------------------
@@ -46,7 +63,7 @@ phase_weight = st.sidebar.slider(
     "Current Season Sample Weight (%)", 
     min_value=0, 
     max_value=100, 
-    step=5,
+    step=5, 
     key="nhl_sample_weight",
     help="Phase 1 (1-5 GP): 20%, Phase 2 (6-12 GP): 40%, Phase 3 (13-20 GP): 70%, Phase 4 (20+ GP): 100%"
 ) / 100.0
@@ -65,9 +82,50 @@ profit_boost = st.sidebar.number_input(
     "Active Sportsbook Profit Boost (%)", 
     min_value=0, 
     max_value=100, 
-    step=5,
+    step=5, 
     key="nhl_profit_boost"
 )
+
+# -------------------------------------------------------------
+# AUTO-SELECTOR ENGINE CONTROLS
+# -------------------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.header("⚡ Auto-Selector Engine")
+
+promo_presets = {
+    "FanDuel (+100 Gate / 3-Leg Sweet Spot)": {"min": 72.0, "max": 84.0, "legs": 3, "team": 1},
+    "BetMGM (-300 Gate / 2-Leg Floor)": {"min": 78.0, "max": 88.0, "legs": 2, "team": 1},
+    "BetMGM (+400 Gate / 3-Leg Longshot)": {"min": 58.0, "max": 68.0, "legs": 3, "team": 1},
+    "Custom / Manual Range": None
+}
+
+def apply_preset():
+    choice = st.session_state["nhl_promo_preset"]
+    if choice in promo_presets and promo_presets[choice] is not None:
+        cfg = promo_presets[choice]
+        st.session_state["nhl_auto_min_prob"] = float(cfg["min"])
+        st.session_state["nhl_auto_max_prob"] = float(cfg["max"])
+        st.session_state["nhl_auto_legs_count"] = int(cfg["legs"])
+        st.session_state["nhl_auto_max_team"] = int(cfg["team"])
+
+st.sidebar.selectbox(
+    "Promo Preset",
+    list(promo_presets.keys()),
+    key="nhl_promo_preset",
+    on_change=apply_preset
+)
+
+col_p1, col_p2 = st.sidebar.columns(2)
+with col_p1:
+    st.sidebar.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nhl_auto_min_prob")
+with col_p2:
+    st.sidebar.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nhl_auto_max_prob")
+
+col_l1, col_l2 = st.sidebar.columns(2)
+with col_l1:
+    st.sidebar.number_input("Target Leg Count", 1, 10, step=1, key="nhl_auto_legs_count")
+with col_l2:
+    st.sidebar.number_input("Max Per Team", 1, 5, step=1, key="nhl_auto_max_team")
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
@@ -156,7 +214,7 @@ with tab2:
     uploaded_files = st.file_uploader(
         "Drop all 4 Natural Stat Trick CSV files here", 
         type=["csv"], 
-        accept_multiple_files=True,
+        accept_multiple_files=True, 
         key="nhl_uploader"
     )
 
@@ -502,27 +560,39 @@ with tab2:
 
                 with col_auto_btn:
                     added_count = 0
-                    if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                        scored_df = merged.copy()
-                        scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
-                        top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
+                    auto_label = f"⚡ Auto-Load {st.session_state['nhl_auto_legs_count']} Promo-Weighted Legs"
+                    if st.button(auto_label, use_container_width=True):
+                        top_candidates = select_promo_legs(
+                            df=merged,
+                            min_prob=st.session_state["nhl_auto_min_prob"],
+                            max_prob=st.session_state["nhl_auto_max_prob"],
+                            target_count=st.session_state["nhl_auto_legs_count"],
+                            max_per_team=st.session_state["nhl_auto_max_team"],
+                            team_col="Clean_Team",
+                            prob_col="Model_Over_Prob_%",
+                            score_col="Matchup_Proj",
+                            matchup_factor_col="Matchup_Factor"
+                        )
                         
-                        for _, row in top_candidates.iterrows():
-                            new_item = {
-                                "Include in Parlay": True,
-                                "Sportsbook": "FanDuel",
-                                "Player": row["Player"],
-                                "Opponent": row["Opponent"],
-                                "Market": row["Market"],
-                                "Line": row["Line"],
-                                "Nexus Odds (+/-)": None,
-                                "Model Prob (%)": row["Model_Over_Prob_%"],
-                                "Delete": False
-                            }
-                            if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
-                                st.session_state["nhl_bet_slip"].append(new_item)
-                                added_count += 1
-                        st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
+                        if top_candidates.empty:
+                            st.warning("No players matched the current probability window. Try widening your Min/Max Prob % in the sidebar.")
+                        else:
+                            for _, row in top_candidates.iterrows():
+                                new_item = {
+                                    "Include in Parlay": True,
+                                    "Sportsbook": "FanDuel",
+                                    "Player": row["Player"],
+                                    "Opponent": row["Opponent"],
+                                    "Market": row["Market"],
+                                    "Line": row["Line"],
+                                    "Nexus Odds (+/-)": None,
+                                    "Model Prob (%)": row["Model_Over_Prob_%"],
+                                    "Delete": False
+                                }
+                                if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nhl_bet_slip"]):
+                                    st.session_state["nhl_bet_slip"].append(new_item)
+                                    added_count += 1
+                            st.success(f"Auto-loaded {added_count} promo-tailored players into Tab 1!")
 
         except Exception as e:
             st.error(f"Error processing files: {str(e)}")
