@@ -15,6 +15,7 @@ from modules.nba_engine import (
     TEAM_MAP,
     REV_TEAM_MAP
 )
+from modules.auto_selector import select_promo_legs
 
 st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
 
@@ -24,6 +25,19 @@ st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
 if "nba_bet_slip" not in st.session_state:
     st.session_state.nba_bet_slip = []
 
+# Auto-Selector Engine Persistent Keys (Universal 70%-82% Sweet Spot)
+if "nba_auto_min_prob" not in st.session_state:
+    st.session_state["nba_auto_min_prob"] = 70.0
+
+if "nba_auto_max_prob" not in st.session_state:
+    st.session_state["nba_auto_max_prob"] = 82.0
+
+if "nba_auto_legs_count" not in st.session_state:
+    st.session_state["nba_auto_legs_count"] = 5
+
+if "nba_auto_max_team" not in st.session_state:
+    st.session_state["nba_auto_max_team"] = 1
+
 # ==========================================
 # 2. SIDEBAR CONTROLS
 # ==========================================
@@ -31,6 +45,22 @@ st.sidebar.title("🏀 NBA Quant Controls")
 boost_pct = st.sidebar.slider("Active Profit Boost (%)", min_value=0, max_value=100, value=30, step=5)
 min_games = st.sidebar.slider("Min Games Played (G)", min_value=1, max_value=20, value=3, step=1)
 min_mpg = st.sidebar.slider("Min Minutes / Game (MPG)", min_value=10.0, max_value=36.0, value=20.0, step=1.0)
+
+# Streamlined Auto-Selector Sidebar Controls
+st.sidebar.markdown("---")
+st.sidebar.header("⚡ Auto-Selector Engine")
+
+col_p1, col_p2 = st.sidebar.columns(2)
+with col_p1:
+    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nba_auto_min_prob")
+with col_p2:
+    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nba_auto_max_prob")
+
+col_l1, col_l2 = st.sidebar.columns(2)
+with col_l1:
+    st.number_input("Target Leg Count", 1, 10, step=1, key="nba_auto_legs_count")
+with col_l2:
+    st.number_input("Max Per Team", 1, 5, step=1, key="nba_auto_max_team")
 
 # ==========================================
 # 3. MAIN NAVIGATION TABS
@@ -350,7 +380,7 @@ with tab2:
     
     # Left Column: Manual Add
     with col_btn1:
-        if st.button("➕ Add Selected Players to Bet Slip"):
+        if st.button("➕ Add Selected Players to Bet Slip", use_container_width=True):
             selected_rows = edited_matrix[edited_matrix["Select"] == True].to_dict("records")
             added_count = 0
             for item in selected_rows:
@@ -370,56 +400,39 @@ with tab2:
             if added_count > 0:
                 st.rerun()
 
-    # Right Column: 3-Layer Weighted Auto-Add Engine
+    # Right Column: Streamlined Auto-Selector Engine
     with col_btn2:
-        if st.button("⚡ Auto-Fill Top 5 Highest Probability Floor Plays"):
-            # Layer 1: Target Sweet-Spot Floor Window (72% to 89%)
-            floor_pool = matrix_df[
-                (matrix_df["Model_Over_Prob_%"] >= 72.0) & 
-                (matrix_df["Model_Over_Prob_%"] <= 89.0)
-            ].copy()
-            
-            # Fallback if window is too restrictive on a small slate
-            if len(floor_pool) < 5:
-                floor_pool = matrix_df[matrix_df["Model_Over_Prob_%"] >= 65.0].copy()
-            
-            # Layer 2: Composite Weighting (Probability boosted by Matchup Factor)
-            floor_pool["Weighted_Score"] = floor_pool["Model_Over_Prob_%"] * (floor_pool["Matchup_Factor"] ** 1.5)
-            floor_pool = floor_pool.sort_values(by="Weighted_Score", ascending=False)
-            
-            # Layer 3: Zero Cannibalization (Enforce Max 1 player per team)
-            top_5 = []
-            teams_used = set()
-            for _, row in floor_pool.iterrows():
-                if row["Clean_Team"] not in teams_used:
-                    top_5.append(row.to_dict())
-                    teams_used.add(row["Clean_Team"])
-                if len(top_5) == 5:
-                    break
-                    
-            # Fallback fill if slate has fewer than 5 unique teams
-            if len(top_5) < 5:
-                for _, row in floor_pool.iterrows():
-                    if not any(b["Player"] == row["Player"] for b in top_5):
-                        top_5.append(row.to_dict())
-                    if len(top_5) == 5:
-                        break
+        auto_label = f"⚡ Auto-Load {st.session_state['nba_auto_legs_count']} Promo-Weighted Legs"
+        if st.button(auto_label, use_container_width=True):
+            top_candidates = select_promo_legs(
+                df=matrix_df,
+                min_prob=st.session_state["nba_auto_min_prob"],
+                max_prob=st.session_state["nba_auto_max_prob"],
+                target_count=st.session_state["nba_auto_legs_count"],
+                max_per_team=st.session_state["nba_auto_max_team"],
+                team_col="Clean_Team",
+                prob_col="Model_Over_Prob_%",
+                score_col="Matchup_Proj",
+                matchup_factor_col="Matchup_Factor"
+            )
 
-            # Instant Transfer with rerun
-            added_count = 0
-            for item in top_5:
-                if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
-                    st.session_state.nba_bet_slip.append({
-                        "Include in Parlay": True,
-                        "Sportsbook": "FanDuel",
-                        "Player": item["Player"],
-                        "Opponent": item["Opponent"],
-                        "Market": item["Market"],
-                        "Line": item["Line"],
-                        "Nexus Odds (+/-)": None,
-                        "Model Prob (%)": item["Model_Over_Prob_%"],
-                        "Delete": False
-                    })
-                    added_count += 1
-            if added_count > 0:
-                st.rerun()
+            if top_candidates.empty:
+                st.warning("No players matched the current probability window. Try widening your Min/Max Prob % in the sidebar.")
+            else:
+                added_count = 0
+                for _, item in top_candidates.iterrows():
+                    if not any(b["Player"] == item["Player"] and b["Market"] == item["Market"] and b["Line"] == item["Line"] for b in st.session_state.nba_bet_slip):
+                        st.session_state.nba_bet_slip.append({
+                            "Include in Parlay": True,
+                            "Sportsbook": "FanDuel",
+                            "Player": item["Player"],
+                            "Opponent": item["Opponent"],
+                            "Market": item["Market"],
+                            "Line": item["Line"],
+                            "Nexus Odds (+/-)": None,
+                            "Model Prob (%)": item["Model_Over_Prob_%"],
+                            "Delete": False
+                        })
+                        added_count += 1
+                if added_count > 0:
+                    st.rerun()
