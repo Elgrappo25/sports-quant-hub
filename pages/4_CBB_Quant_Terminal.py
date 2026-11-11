@@ -3,7 +3,12 @@ import pandas as pd
 import numpy as np
 import requests
 import re
+import sys
+import os
 from scipy.stats import norm
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from modules.auto_selector import select_promo_legs
 
 st.set_page_config(page_title="CBB Quant Terminal", page_icon="🏀", layout="wide")
 
@@ -37,6 +42,19 @@ if "cbb_last_fetch_time" not in st.session_state:
 if "cbb_credits_left" not in st.session_state:
     st.session_state["cbb_credits_left"] = None
 
+# Auto-Selector Engine Persistent Keys
+if "cbb_auto_min_prob" not in st.session_state:
+    st.session_state["cbb_auto_min_prob"] = 70.0
+
+if "cbb_auto_max_prob" not in st.session_state:
+    st.session_state["cbb_auto_max_prob"] = 82.0
+
+if "cbb_auto_legs_count" not in st.session_state:
+    st.session_state["cbb_auto_legs_count"] = 5
+
+if "cbb_auto_max_game" not in st.session_state:
+    st.session_state["cbb_auto_max_game"] = 1
+
 # -------------------------------------------------------------
 # SIDEBAR CONFIGURATION
 # -------------------------------------------------------------
@@ -69,6 +87,22 @@ profit_boost = st.sidebar.number_input(
     step=5,
     key="cbb_profit_boost"
 )
+
+# Streamlined Auto-Selector Sidebar Controls
+st.sidebar.markdown("---")
+st.sidebar.header("⚡ Auto-Selector Engine")
+
+col_p1, col_p2 = st.sidebar.columns(2)
+with col_p1:
+    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="cbb_auto_min_prob")
+with col_p2:
+    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="cbb_auto_max_prob")
+
+col_l1, col_l2 = st.sidebar.columns(2)
+with col_l1:
+    st.number_input("Target Leg Count", 1, 10, step=1, key="cbb_auto_legs_count")
+with col_l2:
+    st.number_input("Max Per Game", 1, 5, step=1, key="cbb_auto_max_game")
 
 st.sidebar.markdown("---")
 st.sidebar.header("📡 The Odds API (Multi-Book Sync)")
@@ -348,7 +382,6 @@ DIRECTIONALS = {
     "NORTHERN", "SOUTHERN", "EASTERN", "WESTERN", "MIDDLE"
 }
 
-# STATE and TECH are intentionally EXCLUDED from stop words to protect qualifiers
 GENERIC_STOP_WORDS = {
     "THE", "OF", "AT", "UNIVERSITY", "COLLEGE",
     "MEN", "MENS", "BASKETBALL"
@@ -360,7 +393,6 @@ def clean_name_tokens(name):
     s = s.replace("(OH)", " OH ").replace("(FL)", " FL ")
     s = re.sub(r'\(.*?\)', '', s)
 
-    # Standardize directionals & common abbreviations
     s = re.sub(r'\bN\b\.?', 'NORTHERN', s)
     s = re.sub(r'\bS\b\.?', 'SOUTHERN', s)
     s = re.sub(r'\bE\b\.?', 'EASTERN', s)
@@ -390,7 +422,6 @@ def resolve_d1_team(raw_name, kp_df):
     raw_str = str(raw_name).strip()
     raw_upper = raw_str.upper()
 
-    # 1. Canonical alias dictionary lookup
     if raw_upper in EXPLICIT_KENPOM_MAP:
         cand = EXPLICIT_KENPOM_MAP[raw_upper]
         if cand in kp_df["TeamName"].values:
@@ -400,7 +431,6 @@ def resolve_d1_team(raw_name, kp_df):
         if not cand.endswith(" St.") and (cand + " St.") in kp_df["TeamName"].values:
             return cand + " St."
 
-    # 2. Direct string match in KenPom
     if raw_str in kp_df["TeamName"].values:
         return raw_str
 
@@ -410,21 +440,17 @@ def resolve_d1_team(raw_name, kp_df):
 
     best_match = None
 
-    # 3. Guarded token resolution
     for kp_name in kp_df["TeamName"].unique():
         kp_tokens = clean_name_tokens(kp_name)
         if not kp_tokens:
             continue
 
-        # Enforce STATE parity (Jacksonville != Jacksonville St; Penn != Penn St)
         if ("STATE" in raw_tokens) != ("STATE" in kp_tokens):
             continue
 
-        # Enforce TECH parity (Georgia != Georgia Tech)
         if ("TECH" in raw_tokens) != ("TECH" in kp_tokens):
             continue
 
-        # Enforce strict directional parity (North Texas != Texas)
         raw_dirs = raw_tokens.intersection(DIRECTIONALS)
         kp_dirs = kp_tokens.intersection(DIRECTIONALS)
         if raw_dirs != kp_dirs:
@@ -436,7 +462,6 @@ def resolve_d1_team(raw_name, kp_df):
         if not core_raw or not core_kp:
             continue
 
-        # Reject non-D1 teams that have distinct proper nouns (Wesleyan, Biblical, Monticello, Lynchburg)
         if core_raw == core_kp or core_kp.issubset(core_raw):
             extra_words = core_raw - core_kp
             known_mascots = {"HAWKS", "WILDCATS", "BULLDOGS", "TIGERS", "EAGLES", "PANTHERS", "BEARS", "PIRATES", "BLUE", "RED", "GOLDEN"}
@@ -499,13 +524,12 @@ with tab2:
                 key="cbb_target_book_filter"
             )
         with c3:
-            # Anchor strictly to US/Eastern date to avoid 7:00 PM EST UTC server rollover
             eastern_today = pd.Timestamp.now(tz="US/Eastern").date()
             slate_date = st.date_input("Target Slate Date", value=eastern_today, key="cbb_slate_date")
 
         date_str = slate_date.strftime("%Y%m%d")
 
-        # 1. LIVE ESPN SCHEDULE FETCH (STRICT D1 + PROPER HOME/AWAY + CHRONOLOGICAL SORT)
+        # 1. LIVE ESPN SCHEDULE FETCH
         schedule_events = []
         schedule_labels = {}
 
@@ -550,8 +574,6 @@ with tab2:
                 home_kp = resolve_d1_team(home_raw, kp_df)
                 away_kp = resolve_d1_team(away_raw, kp_df)
 
-                # Strict D1 guard: BOTH teams must resolve to an authentic D1 KenPom team.
-                # Non-D1 opponents are dropped immediately.
                 if not home_kp or not away_kp:
                     continue
 
@@ -890,33 +912,57 @@ with tab2:
                                 if not any(d["Selection"] == new_item["Selection"] and d["Market"] == new_item["Market"] for d in st.session_state["cbb_bet_slip"]):
                                     st.session_state["cbb_bet_slip"].append(new_item)
                                     added_count += 1
-                            st.success(f"Added {added_count} selected plays to Tab 1 bet slip!")
+                            if added_count > 0:
+                                st.rerun()
                         else:
                             st.warning("Please check at least one game in the matrix first.")
 
                 with col_auto_btn:
-                    if st.button("⚡ Auto-Load Top 5 Highest-EV Value Plays", use_container_width=True):
-                        top_candidates = filtered_matrix.sort_values(by=sort_col, ascending=False).head(5)
-                        added_count = 0
-                        for _, match_orig in top_candidates.iterrows():
-                            prob_val = match_orig.get("Cover_Prob_%", match_orig.get("Model_Win_Prob_%", match_orig.get("Over_Prob_%", 50.0)))
-                            new_item = {
-                                "Include in Parlay": True,
-                                "Sportsbook": match_orig["Best_Book"],
-                                "Matchup": match_orig["Tag"],
-                                "Selection": match_orig["Selection"],
-                                "Market": selected_market,
-                                "Line": match_orig["Line"],
-                                "Nexus Odds (+/-)": match_orig["Odds"],
-                                "Model Prob (%)": prob_val,
-                                "Proj_Margin": match_orig["Proj_Margin"],
-                                "Fair_Total": match_orig.get("Fair_Total_Val", match_orig.get("Fair_Total", 140.0)),
-                                "Delete": False
-                            }
-                            if not any(d["Selection"] == new_item["Selection"] and d["Market"] == new_item["Market"] for d in st.session_state["cbb_bet_slip"]):
-                                st.session_state["cbb_bet_slip"].append(new_item)
-                                added_count += 1
-                        st.success(f"Auto-loaded top {added_count} highest-EV plays into Tab 1!")
+                    prob_col_map = {
+                        "Spread (Cover)": "Cover_Prob_%",
+                        "Moneyline (Win)": "Model_Win_Prob_%",
+                        "Game Total (Over)": "Over_Prob_%"
+                    }
+                    prob_col_name = prob_col_map.get(selected_market, "Cover_Prob_%")
+                    auto_label = f"⚡ Auto-Load {st.session_state['cbb_auto_legs_count']} Promo-Weighted Plays"
+
+                    if st.button(auto_label, use_container_width=True):
+                        top_candidates = select_promo_legs(
+                            df=filtered_matrix,
+                            min_prob=st.session_state["cbb_auto_min_prob"],
+                            max_prob=st.session_state["cbb_auto_max_prob"],
+                            target_count=st.session_state["cbb_auto_legs_count"],
+                            max_per_team=st.session_state["cbb_auto_max_game"],
+                            team_col="Tag",
+                            prob_col=prob_col_name,
+                            score_col=sort_col,
+                            matchup_factor_col="None"
+                        )
+
+                        if top_candidates.empty:
+                            st.warning("No games matched the current probability window. Try widening your Min/Max Prob % in the sidebar.")
+                        else:
+                            added_count = 0
+                            for _, match_orig in top_candidates.iterrows():
+                                prob_val = match_orig.get(prob_col_name, 50.0)
+                                new_item = {
+                                    "Include in Parlay": True,
+                                    "Sportsbook": match_orig["Best_Book"],
+                                    "Matchup": match_orig["Tag"],
+                                    "Selection": match_orig["Selection"],
+                                    "Market": selected_market,
+                                    "Line": match_orig["Line"],
+                                    "Nexus Odds (+/-)": match_orig["Odds"],
+                                    "Model Prob (%)": prob_val,
+                                    "Proj_Margin": match_orig["Proj_Margin"],
+                                    "Fair_Total": match_orig.get("Fair_Total_Val", match_orig.get("Fair_Total", 140.0)),
+                                    "Delete": False
+                                }
+                                if not any(d["Selection"] == new_item["Selection"] and d["Market"] == new_item["Market"] for d in st.session_state["cbb_bet_slip"]):
+                                    st.session_state["cbb_bet_slip"].append(new_item)
+                                    added_count += 1
+                            if added_count > 0:
+                                st.rerun()
             else:
                 st.info("No games match the current spread/juice criteria on this slate.")
         else:
