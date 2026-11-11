@@ -3,7 +3,12 @@ import pandas as pd
 import numpy as np
 import requests
 import re
+import sys
+import os
 from scipy.stats import poisson, norm
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from modules.auto_selector import select_promo_legs
 
 st.set_page_config(page_title="NFL Quant Terminal", page_icon="🏈", layout="wide")
 
@@ -27,6 +32,19 @@ if "nfl_cached_tables" not in st.session_state:
 
 if "nfl_file_signature" not in st.session_state:
     st.session_state["nfl_file_signature"] = None
+
+# Auto-Selector Engine Persistent Keys (Universal 70%-82% Sweet Spot)
+if "nfl_auto_min_prob" not in st.session_state:
+    st.session_state["nfl_auto_min_prob"] = 70.0
+
+if "nfl_auto_max_prob" not in st.session_state:
+    st.session_state["nfl_auto_max_prob"] = 82.0
+
+if "nfl_auto_legs_count" not in st.session_state:
+    st.session_state["nfl_auto_legs_count"] = 5
+
+if "nfl_auto_max_team" not in st.session_state:
+    st.session_state["nfl_auto_max_team"] = 1
 
 # Hardcoded model dampening (50% league baseline 1.0, 50% opponent rate)
 PHASE_WEIGHT = 0.50
@@ -56,6 +74,22 @@ profit_boost = st.sidebar.number_input(
     key="nfl_profit_boost",
     help="Applied to compound parlays in Tab 1."
 )
+
+# Streamlined Auto-Selector Sidebar Controls
+st.sidebar.markdown("---")
+st.sidebar.header("⚡ Auto-Selector Engine")
+
+col_p1, col_p2 = st.sidebar.columns(2)
+with col_p1:
+    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nfl_auto_min_prob")
+with col_p2:
+    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nfl_auto_max_prob")
+
+col_l1, col_l2 = st.sidebar.columns(2)
+with col_l1:
+    st.number_input("Target Leg Count", 1, 10, step=1, key="nfl_auto_legs_count")
+with col_l2:
+    st.number_input("Max Per Team", 1, 5, step=1, key="nfl_auto_max_team")
 
 tab1, tab2 = st.tabs(["📋 Checked Slips & Odds Comparator", "📁 Slate Matrix & Projections"])
 
@@ -458,6 +492,7 @@ with tab2:
                     with col_add_btn:
                         if st.button("➕ Add Checked Players to Bet Slip", use_container_width=True):
                             selected_rows = edited_df[edited_df["Select"] == True]
+                            added_count = 0
                             if not selected_rows.empty:
                                 for _, row in selected_rows.iterrows():
                                     new_item = {
@@ -471,35 +506,50 @@ with tab2:
                                         "Model Prob (%)": row["Model_Over_Prob_%"],
                                         "Delete": False
                                     }
-                                    if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nfl_bet_slip"]):
+                                    if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] and d["Line"] == new_item["Line"] for d in st.session_state["nfl_bet_slip"]):
                                         st.session_state["nfl_bet_slip"].append(new_item)
-                                st.success(f"Added {len(selected_rows)} checked players to Tab 1!")
+                                        added_count += 1
+                                if added_count > 0:
+                                    st.rerun()
                             else:
                                 st.warning("Please check at least one player in the matrix first.")
 
                     with col_auto_btn:
-                        added_count = 0
-                        if st.button("⚡ Auto-Load Top 5 Matchup-Weighted Legs", use_container_width=True):
-                            scored_df = merged.copy()
-                            scored_df["Auto_Score"] = scored_df["Matchup_Proj"] * scored_df["Matchup_Factor"]
-                            top_candidates = scored_df.sort_values(by="Auto_Score", ascending=False).head(5)
-                            
-                            for _, row in top_candidates.iterrows():
-                                new_item = {
-                                    "Include in Parlay": True,
-                                    "Sportsbook": "FanDuel",
-                                    "Player": row["Player"],
-                                    "Opponent": row["Opponent"],
-                                    "Market": row["Market"],
-                                    "Line": row["Line"],
-                                    "Nexus Odds (+/-)": None,
-                                    "Model Prob (%)": row["Model_Over_Prob_%"],
-                                    "Delete": False
-                                }
-                                if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] for d in st.session_state["nfl_bet_slip"]):
-                                    st.session_state["nfl_bet_slip"].append(new_item)
-                                    added_count += 1
-                            st.success(f"Auto-loaded top {added_count} matchup-weighted players into Tab 1!")
+                        auto_label = f"⚡ Auto-Load {st.session_state['nfl_auto_legs_count']} Promo-Weighted Legs"
+                        if st.button(auto_label, use_container_width=True):
+                            top_candidates = select_promo_legs(
+                                df=merged,
+                                min_prob=st.session_state["nfl_auto_min_prob"],
+                                max_prob=st.session_state["nfl_auto_max_prob"],
+                                target_count=st.session_state["nfl_auto_legs_count"],
+                                max_per_team=st.session_state["nfl_auto_max_team"],
+                                team_col="Clean_Team",
+                                prob_col="Model_Over_Prob_%",
+                                score_col="Matchup_Proj",
+                                matchup_factor_col="Matchup_Factor"
+                            )
+
+                            if top_candidates.empty:
+                                st.warning("No players matched the current probability window. Try widening your Min/Max Prob % in the sidebar.")
+                            else:
+                                added_count = 0
+                                for _, row in top_candidates.iterrows():
+                                    new_item = {
+                                        "Include in Parlay": True,
+                                        "Sportsbook": "FanDuel",
+                                        "Player": row["Player"],
+                                        "Opponent": row["Opponent"],
+                                        "Market": row["Market"],
+                                        "Line": row["Line"],
+                                        "Nexus Odds (+/-)": None,
+                                        "Model Prob (%)": row["Model_Over_Prob_%"],
+                                        "Delete": False
+                                    }
+                                    if not any(d["Player"] == new_item["Player"] and d["Market"] == new_item["Market"] and d["Line"] == new_item["Line"] for d in st.session_state["nfl_bet_slip"]):
+                                        st.session_state["nfl_bet_slip"].append(new_item)
+                                        added_count += 1
+                                if added_count > 0:
+                                    st.rerun()
 
             else:
                 st.info("No player data available for this market.")
