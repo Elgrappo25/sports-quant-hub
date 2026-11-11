@@ -10,7 +10,7 @@ def select_promo_legs(
     prob_col: str = "Model_Over_Prob_%",
     score_col: str = "Matchup_Proj",
     matchup_factor_col: str = "Matchup_Factor",
-    min_matchup_factor: float = 1.00
+    min_matchup_factor: float = 0.85
 ) -> pd.DataFrame:
     """
     Downstream read-only filter for Sportsbook Promo Boosts.
@@ -25,13 +25,14 @@ def select_promo_legs(
     # 1. Hard Filter: Probability Window (prevents juice traps & low floor legs)
     mask = (working_df[prob_col] >= min_prob) & (working_df[prob_col] <= max_prob)
     
-    # 2. Hard Filter: Matchup Factor (neutral or positive pace spots only)
+    # 2. Matchup Factor Floor: Permits slight road/defensive dips (e.g. 0.95 - 0.99)
+    # while continuing to block extreme trap spots (< 0.85).
     if matchup_factor_col in working_df.columns:
         mask = mask & (working_df[matchup_factor_col] >= min_matchup_factor)
 
     filtered = working_df[mask].copy()
 
-    # Fallback: widen criteria slightly if slate is small
+    # Fallback: widen probability criteria slightly if slate is small
     if filtered.empty:
         filtered = working_df[(working_df[prob_col] >= min_prob - 5.0) & 
                               (working_df[prob_col] <= max_prob + 5.0)].copy()
