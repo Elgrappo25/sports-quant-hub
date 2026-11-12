@@ -79,13 +79,17 @@ def get_market_threshold_defaults(sport: str, market: str, line: float = None) -
     market = str(market).strip()
     val = float(line) if line is not None else 0.0
 
+    # ---------------------------------------------------------
     # 1. COLLEGE BASKETBALL (CBB)
+    # ---------------------------------------------------------
     if sport == "CBB":
         if "Moneyline" in market:
             return (70.0, 82.0)
         return (56.0, 68.0)
 
+    # ---------------------------------------------------------
     # 2. NFL PROPS
+    # ---------------------------------------------------------
     if sport == "NFL":
         if "Touchdown" in market or market == "Anytime Touchdown":
             return (40.0, 56.0)
@@ -111,7 +115,9 @@ def get_market_threshold_defaults(sport: str, market: str, line: float = None) -
             else:
                 return (38.0, 52.0)
 
+    # ---------------------------------------------------------
     # 3. NBA PROPS
+    # ---------------------------------------------------------
     if sport == "NBA":
         if "3" in market or "Three" in market:
             if val <= 1.5:
@@ -120,7 +126,7 @@ def get_market_threshold_defaults(sport: str, market: str, line: float = None) -
                 return (52.0, 64.0)
             else:
                 return (32.0, 48.0)
-        if market == "Points":
+        if "Point" in market:
             if val <= 19.5:
                 return (70.0, 82.0)
             elif val <= 24.5:
@@ -149,14 +155,10 @@ def get_market_threshold_defaults(sport: str, market: str, line: float = None) -
             else:
                 return (36.0, 50.0)
 
-    # 4. NHL PROPS
+    # ---------------------------------------------------------
+    # 4. NHL PROPS (Check SOG before Goal so "Shots on Goal" doesn't match "Goal")
+    # ---------------------------------------------------------
     if sport == "NHL":
-        if "Goal" in market:
-            return (35.0, 50.0)
-        if "Point" in market:
-            return (70.0, 82.0) if val <= 0.5 else (35.0, 48.0)
-        if "Assist" in market:
-            return (64.0, 76.0) if val <= 0.5 else (32.0, 46.0)
         if "Shot" in market or "SOG" in market:
             if val <= 1.5:
                 return (70.0, 82.0)
@@ -164,6 +166,12 @@ def get_market_threshold_defaults(sport: str, market: str, line: float = None) -
                 return (56.0, 68.0)
             else:
                 return (38.0, 52.0)
+        if "Goal" in market:
+            return (35.0, 50.0)
+        if "Point" in market:
+            return (70.0, 82.0) if val <= 0.5 else (35.0, 48.0)
+        if "Assist" in market:
+            return (64.0, 76.0) if val <= 0.5 else (32.0, 46.0)
 
     # Universal Fallback
     return (70.0, 82.0)
