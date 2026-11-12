@@ -8,12 +8,31 @@ import os
 from scipy.stats import poisson, norm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from modules.auto_selector import select_promo_legs
+from modules.auto_selector import select_promo_legs, get_market_threshold_defaults
 
 st.set_page_config(page_title="NFL Quant Terminal", page_icon="🏈", layout="wide")
 
 st.title("🏈 NFL Quant Terminal: Production Suite")
 st.markdown("Play-by-play data processing, schedule pace adjustments, matchup dampening, and alt-line prop accumulators.")
+
+# -------------------------------------------------------------
+# MARKET & MILESTONE CONFIGURATION
+# -------------------------------------------------------------
+NFL_MARKET_THRESHOLD_MAP = {
+    "Receiving Yards": [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5],
+    "Receptions": [1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
+    "Anytime Touchdown": [0.5],
+    "Rushing Yards": [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5],
+    "Passing Yards": [199.5, 224.5, 249.5, 274.5, 299.5]
+}
+
+NFL_DEFAULT_INDICES = {
+    "Receiving Yards": 0,    # Default: 24.5
+    "Receptions": 1,         # Default: 2.5
+    "Anytime Touchdown": 0,  # Default: 0.5
+    "Rushing Yards": 1,      # Default: 39.5
+    "Passing Yards": 1       # Default: 224.5
+}
 
 # -------------------------------------------------------------
 # PERSISTENT SESSION STATE INITIALIZATION
@@ -33,7 +52,7 @@ if "nfl_cached_tables" not in st.session_state:
 if "nfl_file_signature" not in st.session_state:
     st.session_state["nfl_file_signature"] = None
 
-# Auto-Selector Engine Persistent Keys (Universal 70%-82% Sweet Spot)
+# Auto-Selector Engine Persistent Keys (Aligned with default Receiving Yards > 24.5)
 if "nfl_auto_min_prob" not in st.session_state:
     st.session_state["nfl_auto_min_prob"] = 70.0
 
@@ -48,6 +67,27 @@ if "nfl_auto_max_team" not in st.session_state:
 
 # Hardcoded model dampening (50% league baseline 1.0, 50% opponent rate)
 PHASE_WEIGHT = 0.50
+
+
+def sync_nfl_market_filters():
+    mkt = st.session_state.get("nfl_market_selector", "Receiving Yards")
+    opts = NFL_MARKET_THRESHOLD_MAP.get(mkt, [24.5, 39.5, 49.5])
+    def_idx = NFL_DEFAULT_INDICES.get(mkt, 0)
+    line = st.session_state.get(f"nfl_line_selector_{mkt}", opts[def_idx])
+    p_min, p_max = get_market_threshold_defaults(sport="NFL", market=mkt, line=line)
+    st.session_state["nfl_auto_min_prob"] = p_min
+    st.session_state["nfl_auto_max_prob"] = p_max
+
+
+def sync_nfl_line_filters():
+    mkt = st.session_state.get("nfl_market_selector", "Receiving Yards")
+    opts = NFL_MARKET_THRESHOLD_MAP.get(mkt, [24.5, 39.5, 49.5])
+    def_idx = NFL_DEFAULT_INDICES.get(mkt, 0)
+    line = st.session_state.get(f"nfl_line_selector_{mkt}", opts[def_idx])
+    p_min, p_max = get_market_threshold_defaults(sport="NFL", market=mkt, line=line)
+    st.session_state["nfl_auto_min_prob"] = p_min
+    st.session_state["nfl_auto_max_prob"] = p_max
+
 
 # -------------------------------------------------------------
 # SIDEBAR CONFIGURATION (STREAMLINED & MINIMAL)
@@ -70,7 +110,7 @@ profit_boost = st.sidebar.number_input(
     min_value=0, 
     max_value=100, 
     value=st.session_state["nfl_profit_boost"],
-    step=5,
+    step=5, 
     key="nfl_profit_boost",
     help="Applied to compound parlays in Tab 1."
 )
@@ -81,9 +121,9 @@ st.sidebar.header("⚡ Auto-Selector Engine")
 
 col_p1, col_p2 = st.sidebar.columns(2)
 with col_p1:
-    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nfl_auto_min_prob")
+    st.number_input("Min Model Prob (%)", 25.0, 95.0, step=1.0, key="nfl_auto_min_prob")
 with col_p2:
-    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nfl_auto_max_prob")
+    st.number_input("Max Model Prob (%)", 35.0, 99.0, step=1.0, key="nfl_auto_max_prob")
 
 col_l1, col_l2 = st.sidebar.columns(2)
 with col_l1:
@@ -291,31 +331,18 @@ with tab2:
         selected_market = st.selectbox(
             "Select Target Prop Market",
             ["Receiving Yards", "Receptions", "Anytime Touchdown", "Rushing Yards", "Passing Yards"],
-            key="nfl_market_selector"
+            key="nfl_market_selector",
+            on_change=sync_nfl_market_filters
         )
 
-    market_threshold_map = {
-        "Receiving Yards": [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5],
-        "Receptions": [1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
-        "Anytime Touchdown": [0.5],
-        "Rushing Yards": [24.5, 39.5, 49.5, 59.5, 69.5, 79.5, 89.5],
-        "Passing Yards": [199.5, 224.5, 249.5, 274.5, 299.5]
-    }
-    default_indices = {
-        "Receiving Yards": 0,
-        "Receptions": 1,
-        "Anytime Touchdown": 0,
-        "Rushing Yards": 1,
-        "Passing Yards": 1
-    }
-
     with col_line:
-        threshold_options = market_threshold_map.get(selected_market, [24.5, 39.5, 49.5])
+        threshold_options = NFL_MARKET_THRESHOLD_MAP.get(selected_market, [24.5, 39.5, 49.5])
         selected_line = st.selectbox(
             "Select Target Threshold Line", 
             threshold_options, 
-            index=default_indices.get(selected_market, 0),
-            key=f"nfl_line_selector_{selected_market}"
+            index=NFL_DEFAULT_INDICES.get(selected_market, 0),
+            key=f"nfl_line_selector_{selected_market}",
+            on_change=sync_nfl_line_filters
         )
 
     slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="nfl_slate_date")
