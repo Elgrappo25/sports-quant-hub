@@ -65,6 +65,27 @@ def normalize_player_name(name: str) -> str:
     return " ".join(s.split())
 
 
+def _match_initial_lastname(short_name: str, savant_df: pd.DataFrame) -> pd.Series | None:
+    """Matches abbreviated names like 'J. Cantillo' or 'D. Martin' against Savant 'Last, First' rows."""
+    if savant_df.empty or "last_name, first_name" not in savant_df.columns:
+        return None
+    clean = re.sub(r"\((op|bk)\)", "", str(short_name), flags=re.IGNORECASE).strip()
+    parts = clean.replace(".", "").split()
+    if len(parts) < 2:
+        return None
+    first_init = parts[0][0].lower()
+    last_target = " ".join(parts[1:]).lower()
+
+    for _, row in savant_df.iterrows():
+        raw_full = str(row["last_name, first_name"])
+        if "," not in raw_full:
+            continue
+        l_part, f_part = [x.strip().lower() for x in raw_full.split(",", 1)]
+        if l_part == last_target and f_part.startswith(first_init):
+            return row
+    return None
+
+
 def _parse_pct_col(series: pd.Series) -> pd.Series:
     """Parses '+6%' or '-11%' into numeric decimal (+6.0 -> 0.06)."""
     return (
@@ -204,8 +225,8 @@ def _prob_tb_over(line: float, lam_1b: float, lam_2b: float, lam_3b: float, lam_
 def process_mlb_files(uploaded_files: list) -> dict:
     """
     Auto-routes all 16 Ballpark Pal & Baseball Savant files (.csv and .xlsx)
-    by column signature, joins on MLBAM PlayerId and Team, and builds unified
-    batter and pitcher projection tables plus slate metadata.
+    by column signature, detects Opener (op) and Bulk (bk) roles, joins on
+    MLBAM PlayerId and Team, and builds unified batter & pitcher tables.
     """
     bpp_batters = pd.DataFrame()
     bpp_pitchers = pd.DataFrame()
@@ -232,68 +253,44 @@ def process_mlb_files(uploaded_files: list) -> dict:
 
         cols = set(str(c).strip() for c in df.columns)
 
-        # 1. BallparkPal_Batters
         if {"PlateAppearances", "Bases", "HitProbability", "HomeRunProbability"}.issubset(cols):
             bpp_batters = df.copy()
             loaded_tags.append("BallparkPal Batters")
-
-        # 2. BallparkPal_Pitchers
         elif {"BattersFaced", "Innings", "QualityStart", "Strikeouts"}.issubset(cols):
             bpp_pitchers = df.copy()
             loaded_tags.append("BallparkPal Pitchers")
-
-        # 3. BallparkPal_Games
         elif {"AwayTeam", "HomeTeam", "RunsAway", "RunsHome"}.issubset(cols):
             bpp_games = df.copy()
             loaded_tags.append("BallparkPal Games")
-
-        # 4. BallparkPal_Teams
         elif {"WinPercent", "HomeRuns0", "RunsInning1"}.issubset(cols):
             bpp_teams = df.copy()
             loaded_tags.append("BallparkPal Teams")
-
-        # 5. Matchups.xlsx
         elif {"RC", "HR Boost", "XB Boost", "1B Boost", "K Boost"}.issubset(cols):
             bpp_matchups = df.copy()
             loaded_tags.append("BallparkPal Matchups")
-
-        # 6. ParkFactors.csv (Game Stadium + Weather)
         elif {"Venue", "HR %", "2B/3B %", "1B %", "Runs %"}.issubset(cols):
             park_factors_game = df.copy()
             loaded_tags.append("ParkFactors (Game/Weather)")
-
-        # 7. Todays MLB Park Factors.xlsx (Directional Spray)
         elif {"Tm", "Player", "Park", "2B/3B"}.issubset(cols):
             park_factors_player = df.copy()
             loaded_tags.append("ParkFactors (Player Spray)")
-
-        # 8. StartingPitchers_Projections.csv
         elif {"Pitcher", "Inn", "BF", "K", "BB"}.issubset(cols):
             sp_proj_csv = df.copy()
-            loaded_tags.append("SP Projections CSV")
-
-        # 9. Baseball Savant: Expected Stats (Batter or Pitcher)
+            loaded_tags.append("SP Projections (Opener/Bulk)")
         elif {"est_ba", "est_slg", "est_woba"}.issubset(cols):
             savant_exp_list.append(df.copy())
             tag = "Savant Expected (Pitcher)" if "xera" in cols else "Savant Expected (Batter)"
             loaded_tags.append(tag)
-
-        # 10. Baseball Savant: Exit Velocity / Barrels
         elif {"brl_percent", "ev95percent", "avg_hit_speed"}.issubset(cols):
             savant_ev_list.append(df.copy())
             loaded_tags.append("Savant Exit Velo/Barrels")
-
-        # 11. Baseball Savant: Batted Ball Profile
         elif {"pull_air_rate", "air_rate", "fb_rate", "ld_rate"}.issubset(cols):
             savant_bb_list.append(df.copy())
             loaded_tags.append("Savant Batted Ball")
-
-        # 12. Baseball Savant: Bat Tracking
         elif {"avg_bat_speed", "hard_swing_rate", "blast_per_swing"}.issubset(cols):
             savant_bt_list.append(df.copy())
             loaded_tags.append("Savant Bat Tracking")
 
-    # Combine duplicate Savant tables and deduplicate by MLBAM ID
     def _merge_savant(dfs: list, id_candidates: list[str]) -> pd.DataFrame:
         if not dfs:
             return pd.DataFrame()
@@ -310,6 +307,13 @@ def process_mlb_files(uploaded_files: list) -> dict:
     sav_ev = _merge_savant(savant_ev_list, ["player_id", "id"])
     sav_bb = _merge_savant(savant_bb_list, ["id", "player_id"])
     sav_bt = _merge_savant(savant_bt_list, ["id", "player_id"])
+
+    # Separate pitcher-only Savant expected table for initial+lastname matching on bulk arms
+    sav_pit_exp = pd.DataFrame()
+    for df_e in savant_exp_list:
+        if "xera" in df_e.columns:
+            sav_pit_exp = df_e.copy()
+            break
 
     # Build Team-level Park + Weather & Implied Run Total lookups
     team_env = {}
@@ -357,7 +361,61 @@ def process_mlb_files(uploaded_files: list) -> dict:
                     })
 
     # ---------------------------------------------------------
-    # BUILD MASTER PITCHER TABLE
+    # PARSE OPENER (op) & BULK (bk) ROLES FROM SP PROJECTIONS CSV
+    # ---------------------------------------------------------
+    team_pitching_plan = {}  # team -> {"opener": dict|None, "bulk": dict|None, "sp": dict|None}
+    bulk_rows_to_add = []
+
+    if not sp_proj_csv.empty:
+        for _, r in sp_proj_csv.iterrows():
+            tm = normalize_team(r.get("Team"))
+            opp = normalize_team(r.get("Opp"))
+            raw_name = str(r.get("Pitcher", "")).strip()
+            hand = str(r.get("H", "R")).strip()
+            inn = float(pd.to_numeric(r.get("Inn"), errors="coerce") or 0.0)
+            bf = float(pd.to_numeric(r.get("BF"), errors="coerce") or 0.0)
+            ks = float(pd.to_numeric(r.get("K"), errors="coerce") or 0.0)
+
+            role = "SP"
+            if "(op)" in raw_name.lower():
+                role = "Opener"
+            elif "(bk)" in raw_name.lower():
+                role = "Bulk"
+
+            clean_name = re.sub(r"\((op|bk)\)", "", raw_name, flags=re.IGNORECASE).strip()
+            sav_match = _match_initial_lastname(clean_name, sav_pit_exp)
+            pid = int(sav_match["player_id"]) if (sav_match is not None and pd.notna(sav_match.get("player_id"))) else 0
+            full_resolved_name = (
+                f"{sav_match['last_name, first_name'].split(',')[1].strip()} {sav_match['last_name, first_name'].split(',')[0].strip()}"
+                if (sav_match is not None and "," in str(sav_match.get("last_name, first_name", "")))
+                else clean_name
+            )
+
+            entry = {
+                "Team": tm,
+                "Opponent": opp,
+                "Clean_Name": full_resolved_name,
+                "Role": role,
+                "Hand": hand,
+                "Innings": inn,
+                "BattersFaced": bf,
+                "Strikeouts": ks,
+                "PlayerId": pid,
+            }
+            team_pitching_plan.setdefault(tm, {"opener": None, "bulk": None, "sp": None})
+            if role == "Opener":
+                team_pitching_plan[tm]["opener"] = entry
+                team_env.setdefault(tm, {})["Has_Opener"] = True
+                if opp in team_env:
+                    team_env[opp]["Opp_Has_Opener"] = True
+            elif role == "Bulk":
+                team_pitching_plan[tm]["bulk"] = entry
+                bulk_rows_to_add.append(entry)
+            else:
+                team_pitching_plan[tm]["sp"] = entry
+
+    # ---------------------------------------------------------
+    # BUILD MASTER PITCHER TABLE (INCLUDING OPENERS & BULK ARMS)
     # ---------------------------------------------------------
     pitchers_df = pd.DataFrame()
     if not bpp_pitchers.empty:
@@ -366,6 +424,41 @@ def process_mlb_files(uploaded_files: list) -> dict:
         pitchers_df["Clean_Team"] = pitchers_df["Team"].apply(normalize_team)
         pitchers_df["Clean_Opp"] = pitchers_df["Opponent"].apply(normalize_team)
         pitchers_df["Norm_Name"] = pitchers_df["FullName"].apply(normalize_player_name)
+
+        # Assign Role ("Opener" vs "SP") from StartingPitchers_Projections
+        roles = []
+        for _, p in pitchers_df.iterrows():
+            plan = team_pitching_plan.get(p["Clean_Team"], {})
+            if plan.get("opener") is not None:
+                roles.append("Opener")
+            else:
+                roles.append("SP")
+        pitchers_df["Pitcher_Role"] = roles
+
+        # Append Bulk (bk) pitchers from StartingPitchers_Projections so they appear on the K board
+        if bulk_rows_to_add:
+            existing_pids = set(pitchers_df["PlayerId"].tolist())
+            new_bulk_records = []
+            for b_ent in bulk_rows_to_add:
+                if b_ent["PlayerId"] != 0 and b_ent["PlayerId"] in existing_pids:
+                    continue
+                new_bulk_records.append({
+                    "PlayerId": b_ent["PlayerId"],
+                    "FullName": b_ent["Clean_Name"],
+                    "LastName": b_ent["Clean_Name"].split()[-1],
+                    "PitcherHand": b_ent["Hand"],
+                    "Team": b_ent["Team"],
+                    "Opponent": b_ent["Opponent"],
+                    "Clean_Team": b_ent["Team"],
+                    "Clean_Opp": b_ent["Opponent"],
+                    "Norm_Name": normalize_player_name(b_ent["Clean_Name"]),
+                    "BattersFaced": b_ent["BattersFaced"],
+                    "Innings": b_ent["Innings"],
+                    "Strikeouts": b_ent["Strikeouts"],
+                    "Pitcher_Role": "Bulk",
+                })
+            if new_bulk_records:
+                pitchers_df = pd.concat([pitchers_df, pd.DataFrame(new_bulk_records)], ignore_index=True)
 
         if not sav_exp.empty:
             exp_cols = [c for c in ["PlayerId", "pa", "est_ba", "est_slg", "est_woba", "era", "xera"] if c in sav_exp.columns]
@@ -423,18 +516,58 @@ def process_mlb_files(uploaded_files: list) -> dict:
             .astype(int)
         )
 
-    # Lookup opposing starting pitcher vulnerability by defending team
+    # ---------------------------------------------------------
+    # INNINGS-WEIGHTED PITCHER VULNERABILITY BY DEFENDING TEAM
+    # Blends Opener (op) + Bulk (bk) by projected innings when applicable
+    # ---------------------------------------------------------
     opp_pitcher_vuln = {}
     if not pitchers_df.empty:
-        for _, p in pitchers_df.iterrows():
-            defending_tm = p["Clean_Team"]
-            xera = float(p.get("xera", 4.15) if pd.notna(p.get("xera")) else 4.15)
-            brl = float(p.get("brl_percent", 7.8) if pd.notna(p.get("brl_percent")) else 7.8)
-            vuln_score = 1.0 + np.clip((xera - 4.15) / 18.0, -0.10, 0.12) + np.clip((brl - 7.8) / 60.0, -0.06, 0.08)
+        for defending_tm, grp in pitchers_df.groupby("Clean_Team"):
+            total_ip = 0.0
+            weighted_vuln = 0.0
+            opener_row = None
+            bulk_row = None
+            sp_row = None
+
+            for _, p in grp.iterrows():
+                ip = max(float(pd.to_numeric(p.get("Innings"), errors="coerce") or 1.0), 0.5)
+                xera = float(p.get("xera", 4.15) if pd.notna(p.get("xera")) else 4.15)
+                brl = float(p.get("brl_percent", 7.8) if pd.notna(p.get("brl_percent")) else 7.8)
+                v_score = 1.0 + np.clip((xera - 4.15) / 18.0, -0.10, 0.12) + np.clip((brl - 7.8) / 60.0, -0.06, 0.08)
+                weighted_vuln += v_score * ip
+                total_ip += ip
+
+                role = p.get("Pitcher_Role", "SP")
+                if role == "Opener":
+                    opener_row = p
+                elif role == "Bulk":
+                    bulk_row = p
+                else:
+                    sp_row = p
+
+            avg_vuln = float(np.clip(weighted_vuln / max(total_ip, 1.0), 0.84, 1.22))
+
+            if opener_row is not None and bulk_row is not None:
+                op_last = str(opener_row["FullName"]).split()[-1]
+                bk_last = str(bulk_row["FullName"]).split()[-1]
+                disp_name = f"{op_last} (op) / {bk_last} (bk)"
+                disp_hand = f"{opener_row.get('PitcherHand', 'R')}/{bulk_row.get('PitcherHand', 'R')}"
+            elif opener_row is not None:
+                disp_name = f"{opener_row['FullName']} (op)"
+                disp_hand = str(opener_row.get("PitcherHand", "R"))
+            elif sp_row is not None:
+                disp_name = str(sp_row["FullName"])
+                disp_hand = str(sp_row.get("PitcherHand", "R"))
+            else:
+                first_p = grp.iloc[0]
+                disp_name = str(first_p["FullName"])
+                disp_hand = str(first_p.get("PitcherHand", "R"))
+
             opp_pitcher_vuln[defending_tm] = {
-                "Opp_Pitcher": p["FullName"],
-                "Opp_Hand": p.get("PitcherHand", "R"),
-                "Pitcher_Vuln_Mult": float(np.clip(vuln_score, 0.84, 1.22)),
+                "Opp_Pitcher": disp_name,
+                "Opp_Hand": disp_hand,
+                "Pitcher_Vuln_Mult": avg_vuln,
+                "Is_Opener_Game": (opener_row is not None),
             }
 
     # ---------------------------------------------------------
@@ -506,7 +639,10 @@ def process_mlb_files(uploaded_files: list) -> dict:
             env = team_env.get(tm, {})
             game_labels.append(env.get("Matchup_Str", f"{tm} vs {opp}"))
 
-            pit_info = opp_pitcher_vuln.get(opp, {"Opp_Pitcher": "TBD", "Opp_Hand": "R", "Pitcher_Vuln_Mult": 1.0})
+            pit_info = opp_pitcher_vuln.get(
+                opp,
+                {"Opp_Pitcher": "TBD", "Opp_Hand": "R", "Pitcher_Vuln_Mult": 1.0, "Is_Opener_Game": False},
+            )
             opp_names.append(pit_info["Opp_Pitcher"])
             opp_hands.append(pit_info["Opp_Hand"])
 
@@ -518,7 +654,9 @@ def process_mlb_files(uploaded_files: list) -> dict:
             pf_xb = env.get("PF_XB_Adj", 0.0)
             pf_1b = env.get("PF_1B_Adj", 0.0)
 
-            rc_mult = 1.0 + np.clip(m_info["RC"] / 150.0, -0.08, 0.10)
+            # Dampen 1-inning opener matchup grade by 50% when a bulk pitcher follows
+            grade_weight = 0.50 if pit_info.get("Is_Opener_Game") else 1.00
+            rc_mult = 1.0 + np.clip((m_info["RC"] * grade_weight) / 150.0, -0.08, 0.10)
             env_mult = 1.0 + np.clip(pf_runs * 0.5, -0.08, 0.10)
             mf = float(np.clip(pit_info["Pitcher_Vuln_Mult"] * rc_mult * env_mult, 0.80, 1.25))
             m_factors.append(round(mf, 3))
@@ -537,9 +675,9 @@ def process_mlb_files(uploaded_files: list) -> dict:
             contact_nudge = 1.0 + np.clip((est_ba - 0.250) * 0.6, -0.05, 0.06)
             power_nudge = 1.0 + np.clip((brl_pct - 8.0) / 80.0, -0.06, 0.10) + np.clip((pull_air - 0.16) * 0.4, -0.04, 0.06)
 
-            hr_mult = (1.0 + np.clip(pf_hr * 0.4, -0.08, 0.12)) * (1.0 + np.clip(m_info["HR_Boost"] / 250.0, -0.06, 0.08)) * power_nudge
-            xb_mult = (1.0 + np.clip(pf_xb * 0.4, -0.08, 0.12)) * (1.0 + np.clip(m_info["XB_Boost"] / 250.0, -0.06, 0.08)) * power_nudge
-            s1_mult = (1.0 + np.clip(pf_1b * 0.4, -0.06, 0.08)) * (1.0 + np.clip(m_info["1B_Boost"] / 250.0, -0.05, 0.06)) * contact_nudge
+            hr_mult = (1.0 + np.clip(pf_hr * 0.4, -0.08, 0.12)) * (1.0 + np.clip((m_info["HR_Boost"] * grade_weight) / 250.0, -0.06, 0.08)) * power_nudge
+            xb_mult = (1.0 + np.clip(pf_xb * 0.4, -0.08, 0.12)) * (1.0 + np.clip((m_info["XB_Boost"] * grade_weight) / 250.0, -0.06, 0.08)) * power_nudge
+            s1_mult = (1.0 + np.clip(pf_1b * 0.4, -0.06, 0.08)) * (1.0 + np.clip((m_info["1B_Boost"] * grade_weight) / 250.0, -0.05, 0.06)) * contact_nudge
 
             spray_hr_nudge = 0.75 + 0.25 * np.clip(sp_info["Spray_HR"], 0.75, 1.35)
             spray_xb_nudge = 0.75 + 0.25 * np.clip(sp_info["Spray_XB"], 0.75, 1.35)
@@ -631,7 +769,10 @@ def evaluate_mlb_market(
             probs.append(round(float(np.clip(p_over, 0.1, 99.5)), 1))
 
         df["Player"] = df["FullName"]
-        df["Pos_Slot"] = df["PitcherHand"].astype(str) + "HP"
+        df["Pos_Slot"] = df.apply(
+            lambda r: f"{r['PitcherHand']}HP [{r.get('Pitcher_Role', 'SP')}]",
+            axis=1,
+        )
         df["Opponent_Info"] = "vs " + df["Clean_Opp"]
         df["Sample"] = df["Sample_BF"]
         df["Base_Proj"] = pd.to_numeric(df["Strikeouts"], errors="coerce").round(2)
@@ -730,7 +871,11 @@ def fetch_mlb_schedule_with_fallback(parsed_data: dict, target_date: str | None 
     bpp_sp_map = {}
     if not pitchers_df.empty:
         for _, p in pitchers_df.iterrows():
-            bpp_sp_map[p["Clean_Team"]] = p["FullName"]
+            role = p.get("Pitcher_Role", "SP")
+            if role == "Bulk":
+                continue
+            label = f"{p['FullName']} (op)" if role == "Opener" else p["FullName"]
+            bpp_sp_map[p["Clean_Team"]] = label
 
     games_out = []
     try:
@@ -751,16 +896,17 @@ def fetch_mlb_schedule_with_fallback(parsed_data: dict, target_date: str | None 
                     away_abbr = normalize_team(away_name)
                     home_abbr = normalize_team(home_name)
 
-                    away_sp = g.get("teams", {}).get("away", {}).get("probablePitcher", {}).get("fullName") or bpp_sp_map.get(away_abbr, "TBD")
-                    home_sp = g.get("teams", {}).get("home", {}).get("probablePitcher", {}).get("fullName") or bpp_sp_map.get(home_abbr, "TBD")
+                    away_sp = bpp_sp_map.get(away_abbr) or g.get("teams", {}).get("away", {}).get("probablePitcher", {}).get("fullName", "TBD")
+                    home_sp = bpp_sp_map.get(home_abbr) or g.get("teams", {}).get("home", {}).get("probablePitcher", {}).get("fullName", "TBD")
 
                     env = team_env.get(away_abbr, {})
                     tot = env.get("Implied_Game_Total", 8.5)
                     hr_adj = env.get("PF_HR_Adj", 0.0) * 100.0
-                    icon = "🔥" if tot >= 8.8 or hr_adj >= 5.0 else ("🧊" if tot <= 7.6 else "⚾")
+                    has_op = "(op)" in away_sp or "(op)" in home_sp
+                    icon = "⚠️ Opener |" if has_op else ("🔥" if tot >= 8.8 or hr_adj >= 5.0 else ("🧊" if tot <= 7.6 else "⚾"))
 
                     matchup_key = f"{away_abbr} @ {home_abbr}"
-                    pill = f"{matchup_key} [{away_sp.split()[-1]} vs {home_sp.split()[-1]} | {icon} {tot:.1f}R | {hr_adj:+.0f}% HR]"
+                    pill = f"{matchup_key} [{away_sp} vs {home_sp} | {icon} {tot:.1f}R | {hr_adj:+.0f}% HR]"
                     games_out.append({
                         "matchup_key": matchup_key,
                         "pill_label": pill,
@@ -789,9 +935,10 @@ def fetch_mlb_schedule_with_fallback(parsed_data: dict, target_date: str | None 
             home_sp = bpp_sp_map.get(home_abbr, "TBD")
             tot = env.get("Implied_Game_Total", 8.5)
             hr_adj = env.get("PF_HR_Adj", 0.0) * 100.0
-            icon = "🔥" if tot >= 8.8 or hr_adj >= 5.0 else ("🧊" if tot <= 7.6 else "⚾")
+            has_op = "(op)" in away_sp or "(op)" in home_sp
+            icon = "⚠️ Opener |" if has_op else ("🔥" if tot >= 8.8 or hr_adj >= 5.0 else ("🧊" if tot <= 7.6 else "⚾"))
 
-            pill = f"{matchup_key} [{away_sp.split()[-1]} vs {home_sp.split()[-1]} | {icon} {tot:.1f}R | {hr_adj:+.0f}% HR]"
+            pill = f"{matchup_key} [{away_sp} vs {home_sp} | {icon} {tot:.1f}R | {hr_adj:+.0f}% HR]"
             games_out.append({
                 "matchup_key": matchup_key,
                 "pill_label": pill,
