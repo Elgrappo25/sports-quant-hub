@@ -15,9 +15,20 @@ from modules.nba_engine import (
     TEAM_MAP,
     REV_TEAM_MAP
 )
-from modules.auto_selector import select_promo_legs
+from modules.auto_selector import select_promo_legs, get_market_threshold_defaults
 
 st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
+
+# ==========================================
+# 0. MARKET & MILESTONE CONFIGURATION
+# ==========================================
+NBA_LINE_OPTIONS_MAP = {
+    "3-Pointers Made (3PM)": [0.5, 1.5, 2.5, 3.5, 4.5],
+    "Assists (AST)": [1.5, 2.5, 3.5, 4.5, 5.5, 7.5, 9.5],
+    "Rebounds (REB)": [2.5, 3.5, 5.5, 7.5, 9.5, 11.5],
+    "Points (PTS)": [9.5, 14.5, 19.5, 24.5, 29.5],
+    "PRA": [14.5, 19.5, 24.5, 29.5, 34.5, 39.5]
+}
 
 # ==========================================
 # 1. ISOLATED SESSION STATE INITIALIZATION
@@ -25,18 +36,39 @@ st.set_page_config(page_title="NBA Quant Terminal", layout="wide")
 if "nba_bet_slip" not in st.session_state:
     st.session_state.nba_bet_slip = []
 
-# Auto-Selector Engine Persistent Keys (Universal 70%-82% Sweet Spot)
+# Auto-Selector Engine Persistent Keys (Aligned with default 3PM > 1.5)
 if "nba_auto_min_prob" not in st.session_state:
-    st.session_state["nba_auto_min_prob"] = 70.0
+    st.session_state["nba_auto_min_prob"] = 68.0
 
 if "nba_auto_max_prob" not in st.session_state:
-    st.session_state["nba_auto_max_prob"] = 82.0
+    st.session_state["nba_auto_max_prob"] = 80.0
 
 if "nba_auto_legs_count" not in st.session_state:
     st.session_state["nba_auto_legs_count"] = 5
 
 if "nba_auto_max_team" not in st.session_state:
     st.session_state["nba_auto_max_team"] = 1
+
+
+def sync_nba_market_filters():
+    mkt = st.session_state.get("nba_market_selector", "3-Pointers Made (3PM)")
+    opts = NBA_LINE_OPTIONS_MAP.get(mkt, [0.5, 1.5, 2.5])
+    default_line = opts[1] if len(opts) > 1 else opts[0]
+    line = st.session_state.get(f"nba_line_selector_{mkt}", default_line)
+    p_min, p_max = get_market_threshold_defaults(sport="NBA", market=mkt, line=line)
+    st.session_state["nba_auto_min_prob"] = p_min
+    st.session_state["nba_auto_max_prob"] = p_max
+
+
+def sync_nba_line_filters():
+    mkt = st.session_state.get("nba_market_selector", "3-Pointers Made (3PM)")
+    opts = NBA_LINE_OPTIONS_MAP.get(mkt, [0.5, 1.5, 2.5])
+    default_line = opts[1] if len(opts) > 1 else opts[0]
+    line = st.session_state.get(f"nba_line_selector_{mkt}", default_line)
+    p_min, p_max = get_market_threshold_defaults(sport="NBA", market=mkt, line=line)
+    st.session_state["nba_auto_min_prob"] = p_min
+    st.session_state["nba_auto_max_prob"] = p_max
+
 
 # ==========================================
 # 2. SIDEBAR CONTROLS
@@ -52,9 +84,9 @@ st.sidebar.header("⚡ Auto-Selector Engine")
 
 col_p1, col_p2 = st.sidebar.columns(2)
 with col_p1:
-    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nba_auto_min_prob")
+    st.number_input("Min Model Prob (%)", 25.0, 95.0, step=1.0, key="nba_auto_min_prob")
 with col_p2:
-    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nba_auto_max_prob")
+    st.number_input("Max Model Prob (%)", 35.0, 99.0, step=1.0, key="nba_auto_max_prob")
 
 col_l1, col_l2 = st.sidebar.columns(2)
 with col_l1:
@@ -296,18 +328,19 @@ with tab2:
     with col_m:
         market_choice = st.selectbox(
             "Target Prop Market:",
-            ["3-Pointers Made (3PM)", "Assists (AST)", "Rebounds (REB)", "Points (PTS)", "PRA"]
+            ["3-Pointers Made (3PM)", "Assists (AST)", "Rebounds (REB)", "Points (PTS)", "PRA"],
+            key="nba_market_selector",
+            on_change=sync_nba_market_filters
         )
     
-    line_options_map = {
-        "3-Pointers Made (3PM)": [0.5, 1.5, 2.5, 3.5, 4.5],
-        "Assists (AST)": [1.5, 2.5, 3.5, 4.5, 5.5, 7.5, 9.5],
-        "Rebounds (REB)": [2.5, 3.5, 5.5, 7.5, 9.5, 11.5],
-        "Points (PTS)": [9.5, 14.5, 19.5, 24.5, 29.5],
-        "PRA": [14.5, 19.5, 24.5, 29.5, 34.5, 39.5]
-    }
     with col_l:
-        chosen_line = st.selectbox("Select Milestone Alt-Line Floor:", line_options_map[market_choice], index=1)
+        chosen_line = st.selectbox(
+            "Select Milestone Alt-Line Floor:",
+            NBA_LINE_OPTIONS_MAP[market_choice],
+            index=1,
+            key=f"nba_line_selector_{market_choice}",
+            on_change=sync_nba_line_filters
+        )
 
     active_teams = set()
     opp_map = {}
