@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def select_promo_legs(
     df: pd.DataFrame,
     min_prob: float = 72.0,
@@ -64,3 +65,105 @@ def select_promo_legs(
             break
 
     return filtered.loc[selected_indices].drop(columns=["_auto_rank_score"], errors="ignore")
+
+
+def get_market_threshold_defaults(sport: str, market: str, line: float = None) -> tuple[float, float]:
+    """
+    Returns (min_prob, max_prob) tailored to the exact sport, market, and milestone line.
+    Tiers:
+      - Floor / Promo Parlay Rungs: 70.0% - 82.0% (or 68.0% - 80.0% for 3PM)
+      - Mainline / Median Rungs:    56.0% - 68.0%
+      - Alt-Ceiling / Plus-Money:   35.0% - 50.0%
+    """
+    sport = str(sport).strip().upper()
+    market = str(market).strip()
+    val = float(line) if line is not None else 0.0
+
+    # 1. COLLEGE BASKETBALL (CBB)
+    if sport == "CBB":
+        if "Moneyline" in market:
+            return (70.0, 82.0)
+        return (56.0, 68.0)
+
+    # 2. NFL PROPS
+    if sport == "NFL":
+        if "Touchdown" in market or market == "Anytime Touchdown":
+            return (40.0, 56.0)
+        if "Reception" in market:
+            if val <= 2.5:
+                return (70.0, 82.0)
+            elif val <= 4.5:
+                return (56.0, 68.0)
+            else:
+                return (38.0, 52.0)
+        if "Receiving" in market or "Rushing" in market:
+            if val <= 39.5:
+                return (70.0, 82.0)
+            elif val <= 59.5:
+                return (56.0, 68.0)
+            else:
+                return (35.0, 50.0)
+        if "Passing" in market:
+            if val <= 224.5:
+                return (70.0, 82.0)
+            elif val <= 249.5:
+                return (56.0, 68.0)
+            else:
+                return (38.0, 52.0)
+
+    # 3. NBA PROPS
+    if sport == "NBA":
+        if "3" in market or "Three" in market:
+            if val <= 1.5:
+                return (68.0, 80.0)
+            elif val <= 2.5:
+                return (52.0, 64.0)
+            else:
+                return (32.0, 48.0)
+        if market == "Points":
+            if val <= 19.5:
+                return (70.0, 82.0)
+            elif val <= 24.5:
+                return (56.0, 68.0)
+            else:
+                return (36.0, 50.0)
+        if "Rebound" in market:
+            if val <= 5.5:
+                return (70.0, 82.0)
+            elif val <= 7.5:
+                return (56.0, 68.0)
+            else:
+                return (35.0, 50.0)
+        if "Assist" in market:
+            if val <= 4.5:
+                return (70.0, 82.0)
+            elif val <= 6.5:
+                return (56.0, 68.0)
+            else:
+                return (35.0, 50.0)
+        if "PRA" in market:
+            if val <= 24.5:
+                return (70.0, 82.0)
+            elif val <= 29.5:
+                return (56.0, 68.0)
+            else:
+                return (36.0, 50.0)
+
+    # 4. NHL PROPS
+    if sport == "NHL":
+        if "Goal" in market:
+            return (35.0, 50.0)
+        if "Point" in market:
+            return (70.0, 82.0) if val <= 0.5 else (35.0, 48.0)
+        if "Assist" in market:
+            return (64.0, 76.0) if val <= 0.5 else (32.0, 46.0)
+        if "Shot" in market or "SOG" in market:
+            if val <= 1.5:
+                return (70.0, 82.0)
+            elif val <= 2.5:
+                return (56.0, 68.0)
+            else:
+                return (38.0, 52.0)
+
+    # Universal Fallback
+    return (70.0, 82.0)
