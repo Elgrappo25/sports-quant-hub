@@ -1,6 +1,8 @@
 import io
 import re
 import unicodedata
+import zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -64,7 +66,7 @@ def normalize_player_name(name: str) -> str:
 
 
 def _parse_pct_col(series: pd.Series) -> pd.Series:
-    """Parses '+6%' or '-11%' into numeric percentage (+6.0 -> 0.06)."""
+    """Parses '+6%' or '-11%' into numeric decimal (+6.0 -> 0.06)."""
     return (
         series.astype(str)
         .str.replace("%", "", regex=False)
@@ -76,33 +78,100 @@ def _parse_pct_col(series: pd.Series) -> pd.Series:
     )
 
 
+def _read_xlsx_stdlib(raw_bytes: bytes) -> pd.DataFrame:
+    """Zero-dependency .xlsx reader using Python's built-in zipfile + xml parser."""
+    with zipfile.ZipFile(io.BytesIO(raw_bytes), "r") as z:
+        shared_strings = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+            for si in root.findall(".//s:si", ns):
+                texts = [t.text or "" for t in si.findall(".//s:t", ns)]
+                shared_strings.append("".join(texts))
+
+        sheets = sorted(
+            [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+        )
+        if not sheets:
+            return pd.DataFrame()
+        sroot = ET.fromstring(z.read(sheets[0]))
+        ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+        def col_to_idx(col_str: str) -> int:
+            idx = 0
+            for ch in col_str:
+                if ch.isalpha():
+                    idx = idx * 26 + (ord(ch.upper()) - ord("A") + 1)
+            return idx - 1
+
+        rows_data = []
+        for row in sroot.findall(".//s:sheetData/s:row", ns):
+            row_dict = {}
+            for c in row.findall("s:c", ns):
+                ref = c.attrib.get("r", "")
+                col_letters = "".join(ch for ch in ref if ch.isalpha())
+                c_idx = col_to_idx(col_letters) if col_letters else len(row_dict)
+                t_attr = c.attrib.get("t", "")
+                v_el = c.find("s:v", ns)
+                val = None
+                if v_el is not None and v_el.text is not None:
+                    if t_attr == "s":
+                        val = shared_strings[int(v_el.text)]
+                    elif t_attr == "b":
+                        val = v_el.text == "1"
+                    else:
+                        try:
+                            val = float(v_el.text)
+                            if val.is_integer():
+                                val = int(val)
+                        except ValueError:
+                            val = v_el.text
+                else:
+                    is_el = c.find("s:is/s:t", ns)
+                    if is_el is not None:
+                        val = is_el.text
+                row_dict[c_idx] = val
+            if row_dict:
+                max_c = max(row_dict.keys())
+                rows_data.append([row_dict.get(i, None) for i in range(max_c + 1)])
+
+        if not rows_data:
+            return pd.DataFrame()
+        max_cols = max(len(r) for r in rows_data)
+        padded = [r + [None] * (max_cols - len(r)) for r in rows_data]
+        header = [str(h) if h is not None else f"Unnamed: {i}" for i, h in enumerate(padded[0])]
+        df = pd.DataFrame(padded[1:], columns=header)
+        if len(df.columns) > 0 and "Today's MLB Park Factors" in str(df.columns[0]) and len(df) > 0:
+            df.columns = [str(c) if c is not None else f"Unnamed: {i}" for i, c in enumerate(df.iloc[0])]
+            df = df.iloc[1:].reset_index(drop=True)
+        return df
+
+
 def _read_uploaded_file(file_obj) -> tuple[str, pd.DataFrame]:
-    """Reads CSV or XLSX file object into a DataFrame cleanly."""
+    """Reads CSV or XLSX file object into a DataFrame cleanly without external Excel dependencies."""
     fname = getattr(file_obj, "name", "unknown")
     raw_bytes = file_obj.getvalue() if hasattr(file_obj, "getvalue") else file_obj.read()
-    buf = io.BytesIO(raw_bytes)
 
     if fname.lower().endswith(".csv"):
-        df = pd.read_csv(buf)
+        df = pd.read_csv(io.BytesIO(raw_bytes))
         return fname, df
 
-    xls = pd.ExcelFile(buf)
-    sheet = xls.sheet_names[0]
-    df = pd.read_excel(xls, sheet_name=sheet)
-
-    # Handle Ballpark Pal directional park factor export where title is row 0
-    if len(df.columns) > 0 and "Today's MLB Park Factors" in str(df.columns[0]):
-        buf.seek(0)
-        df = pd.read_excel(xls, sheet_name=sheet, header=1)
-
-    return fname, df
+    try:
+        xls = pd.ExcelFile(io.BytesIO(raw_bytes))
+        sheet = xls.sheet_names[0]
+        df = pd.read_excel(xls, sheet_name=sheet)
+        if len(df.columns) > 0 and "Today's MLB Park Factors" in str(df.columns[0]):
+            df = pd.read_excel(xls, sheet_name=sheet, header=1)
+        return fname, df
+    except Exception:
+        df = _read_xlsx_stdlib(raw_bytes)
+        return fname, df
 
 
 def _prob_tb_over(line: float, lam_1b: float, lam_2b: float, lam_3b: float, lam_hr: float) -> float:
     """
     Exact discrete probability convolution for Total Bases:
     TB = 1*(1B) + 2*(2B) + 3*(3B) + 4*(HR).
-    Captures extra-base power swings where 1 double or HR clears 2+ TB immediately.
     """
     target = int(np.floor(line)) + 1
     if target <= 0:
@@ -298,7 +367,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
         pitchers_df["Clean_Opp"] = pitchers_df["Opponent"].apply(normalize_team)
         pitchers_df["Norm_Name"] = pitchers_df["FullName"].apply(normalize_player_name)
 
-        # Merge Savant Pitcher Metrics on PlayerId
         if not sav_exp.empty:
             exp_cols = [c for c in ["PlayerId", "pa", "est_ba", "est_slg", "est_woba", "era", "xera"] if c in sav_exp.columns]
             pitchers_df = pitchers_df.merge(sav_exp[exp_cols], on="PlayerId", how="left")
@@ -312,7 +380,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
             bt_cols = [c for c in ["PlayerId", "whiff_per_swing", "squared_up_per_bat_contact"] if c in sav_bt.columns]
             pitchers_df = pitchers_df.merge(sav_bt[bt_cols], on="PlayerId", how="left")
 
-        # Opposing lineup K environment from BallparkPal_Teams & Matchups
         opp_k_map = {}
         if not bpp_teams.empty and "Strikeouts" in bpp_teams.columns:
             for _, t_row in bpp_teams.iterrows():
@@ -320,32 +387,29 @@ def process_mlb_files(uploaded_files: list) -> dict:
 
         starter_k_boost = {}
         if not bpp_matchups.empty and "Starter" in bpp_matchups.columns:
-            m_st = bpp_matchups[bpp_matchups["Starter"] == 1].copy()
+            m_st = bpp_matchups[pd.to_numeric(bpp_matchups["Starter"], errors="coerce") == 1].copy()
             for (tm, pit_last), grp in m_st.groupby(["Team", "Pitcher"]):
-                starter_k_boost[(normalize_team(tm), str(pit_last).strip().lower())] = float(grp["K Boost"].mean())
+                starter_k_boost[(normalize_team(tm), str(pit_last).strip().lower())] = float(
+                    pd.to_numeric(grp["K Boost"], errors="coerce").mean()
+                )
 
-        # Compute Pitcher Matchup_Factor & Adjusted K Projection
         m_factors = []
         adj_ks = []
         for _, p in pitchers_df.iterrows():
-            base_k = float(p.get("Strikeouts", 4.5) or 4.5)
+            base_k = float(pd.to_numeric(p.get("Strikeouts"), errors="coerce") or 4.5)
             opp_tm = p["Clean_Opp"]
             last_nm = str(p.get("LastName", "")).strip().lower()
 
-            # Opposing team K tendency vs MLB baseline (~8.6 K/game)
             opp_team_k = opp_k_map.get(opp_tm, 8.6)
             team_k_mult = 1.0 + np.clip((opp_team_k - 8.6) / 35.0, -0.10, 0.12)
 
-            # Matchups.xlsx K Boost (e.g. +10 -> +5% boost)
             k_bst = starter_k_boost.get((opp_tm, last_nm), 0.0)
             matchup_k_mult = 1.0 + np.clip(k_bst / 200.0, -0.08, 0.10)
 
-            # Pitcher Savant Whiff% adjustment (baseline ~0.24)
             whiff = float(p.get("whiff_per_swing", 0.24) if pd.notna(p.get("whiff_per_swing")) else 0.24)
             whiff_mult = 1.0 + np.clip((whiff - 0.24) * 0.45, -0.06, 0.08)
 
             mf = float(np.clip(team_k_mult * matchup_k_mult * whiff_mult, 0.82, 1.25))
-            # Mild blend (60% Ballpark Pal simulated K, 40% matchup-adjusted K) so we don't double-count
             final_k = base_k * (0.60 + 0.40 * mf)
 
             m_factors.append(round(mf, 3))
@@ -353,7 +417,11 @@ def process_mlb_files(uploaded_files: list) -> dict:
 
         pitchers_df["Matchup_Factor"] = m_factors
         pitchers_df["Adj_Strikeouts"] = adj_ks
-        pitchers_df["Sample_BF"] = pd.to_numeric(pitchers_df.get("pa", pitchers_df["BattersFaced"] * 15), errors="coerce").fillna(50).astype(int)
+        pitchers_df["Sample_BF"] = (
+            pd.to_numeric(pitchers_df.get("pa", pd.to_numeric(pitchers_df["BattersFaced"], errors="coerce") * 15), errors="coerce")
+            .fillna(50)
+            .astype(int)
+        )
 
     # Lookup opposing starting pitcher vulnerability by defending team
     opp_pitcher_vuln = {}
@@ -362,7 +430,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
             defending_tm = p["Clean_Team"]
             xera = float(p.get("xera", 4.15) if pd.notna(p.get("xera")) else 4.15)
             brl = float(p.get("brl_percent", 7.8) if pd.notna(p.get("brl_percent")) else 7.8)
-            # Higher xERA (>4.15) and higher Barrel% allowed (>7.8%) boost hitter matchup factor
             vuln_score = 1.0 + np.clip((xera - 4.15) / 18.0, -0.10, 0.12) + np.clip((brl - 7.8) / 60.0, -0.06, 0.08)
             opp_pitcher_vuln[defending_tm] = {
                 "Opp_Pitcher": p["FullName"],
@@ -381,7 +448,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
         batters_df["Clean_Opp"] = batters_df["Opponent"].apply(normalize_team)
         batters_df["Norm_Name"] = batters_df["FullName"].apply(normalize_player_name)
 
-        # Merge Savant Batter Metrics on PlayerId
         if not sav_exp.empty:
             exp_cols = [c for c in ["PlayerId", "pa", "ba", "est_ba", "slg", "est_slg", "woba", "est_woba"] if c in sav_exp.columns]
             batters_df = batters_df.merge(sav_exp[exp_cols], on="PlayerId", how="left")
@@ -395,23 +461,21 @@ def process_mlb_files(uploaded_files: list) -> dict:
             bt_cols = [c for c in ["PlayerId", "avg_bat_speed", "hard_swing_rate", "blast_per_swing", "squared_up_per_bat_contact"] if c in sav_bt.columns]
             batters_df = batters_df.merge(sav_bt[bt_cols], on="PlayerId", how="left")
 
-        # Merge Matchups.xlsx (Starter == 1) on Clean_Team + Norm_Name
         matchup_lookup = {}
         if not bpp_matchups.empty:
             m_df = bpp_matchups.copy()
             if "Starter" in m_df.columns:
-                m_df = m_df[m_df["Starter"] == 1]
+                m_df = m_df[pd.to_numeric(m_df["Starter"], errors="coerce") == 1]
             for _, m_row in m_df.iterrows():
                 key = (normalize_team(m_row.get("Team")), normalize_player_name(m_row.get("Batter")))
                 matchup_lookup[key] = {
-                    "RC": float(m_row.get("RC", 0) or 0),
-                    "HR_Boost": float(m_row.get("HR Boost", 0) or 0),
-                    "XB_Boost": float(m_row.get("XB Boost", 0) or 0),
-                    "1B_Boost": float(m_row.get("1B Boost", 0) or 0),
-                    "vs_Grade": float(m_row.get("vs Grade", 0) or 0),
+                    "RC": float(pd.to_numeric(m_row.get("RC"), errors="coerce") or 0),
+                    "HR_Boost": float(pd.to_numeric(m_row.get("HR Boost"), errors="coerce") or 0),
+                    "XB_Boost": float(pd.to_numeric(m_row.get("XB Boost"), errors="coerce") or 0),
+                    "1B_Boost": float(pd.to_numeric(m_row.get("1B Boost"), errors="coerce") or 0),
+                    "vs_Grade": float(pd.to_numeric(m_row.get("vs Grade"), errors="coerce") or 0),
                 }
 
-        # Directional player park factors from Todays MLB Park Factors.xlsx
         spray_lookup = {}
         if not park_factors_player.empty:
             for _, sp_row in park_factors_player.iterrows():
@@ -422,7 +486,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
                     "Spray_1B": float(pd.to_numeric(sp_row.get("1B"), errors="coerce") or 1.0),
                 }
 
-        # Compute Batter Matchup_Factor & Statcast-blended projections
         m_factors = []
         opp_names = []
         opp_hands = []
@@ -450,7 +513,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
             m_info = matchup_lookup.get((tm, n_name), {"RC": 0.0, "HR_Boost": 0.0, "XB_Boost": 0.0, "1B_Boost": 0.0, "vs_Grade": 0.0})
             sp_info = spray_lookup.get((tm, n_name), {"Spray_HR": 1.0, "Spray_XB": 1.0, "Spray_1B": 1.0})
 
-            # Combine Opposing Pitcher Vulnerability + Matchup Grade + Stadium/Weather Runs%
             pf_runs = env.get("PF_Runs_Adj", 0.0)
             pf_hr = env.get("PF_HR_Adj", 0.0)
             pf_xb = env.get("PF_XB_Adj", 0.0)
@@ -461,15 +523,13 @@ def process_mlb_files(uploaded_files: list) -> dict:
             mf = float(np.clip(pit_info["Pitcher_Vuln_Mult"] * rc_mult * env_mult, 0.80, 1.25))
             m_factors.append(round(mf, 3))
 
-            # Base Ballpark Pal simulations
-            base_1b = float(b.get("Singles", 0.5) or 0.5)
-            base_2b = float(b.get("Doubles", 0.15) or 0.15)
-            base_3b = float(b.get("Triples", 0.01) or 0.01)
-            base_hr = float(b.get("HomeRuns", 0.10) or 0.10)
-            base_rbi = float(b.get("RBIs", 0.40) or 0.40)
-            base_runs = float(b.get("Runs", 0.45) or 0.45)
+            base_1b = float(pd.to_numeric(b.get("Singles"), errors="coerce") or 0.5)
+            base_2b = float(pd.to_numeric(b.get("Doubles"), errors="coerce") or 0.15)
+            base_3b = float(pd.to_numeric(b.get("Triples"), errors="coerce") or 0.01)
+            base_hr = float(pd.to_numeric(b.get("HomeRuns"), errors="coerce") or 0.10)
+            base_rbi = float(pd.to_numeric(b.get("RBIs"), errors="coerce") or 0.40)
+            base_runs = float(pd.to_numeric(b.get("Runs"), errors="coerce") or 0.45)
 
-            # Statcast quality-of-contact fine-tuning (mild nudge so BPP remains anchor)
             est_ba = float(b.get("est_ba", 0.250) if pd.notna(b.get("est_ba")) else 0.250)
             brl_pct = float(b.get("brl_percent", 8.0) if pd.notna(b.get("brl_percent")) else 8.0)
             pull_air = float(b.get("pull_air_rate", 0.16) if pd.notna(b.get("pull_air_rate")) else 0.16)
@@ -477,12 +537,10 @@ def process_mlb_files(uploaded_files: list) -> dict:
             contact_nudge = 1.0 + np.clip((est_ba - 0.250) * 0.6, -0.05, 0.06)
             power_nudge = 1.0 + np.clip((brl_pct - 8.0) / 80.0, -0.06, 0.10) + np.clip((pull_air - 0.16) * 0.4, -0.04, 0.06)
 
-            # Component projections incorporating park/weather + matchup boosts
             hr_mult = (1.0 + np.clip(pf_hr * 0.4, -0.08, 0.12)) * (1.0 + np.clip(m_info["HR_Boost"] / 250.0, -0.06, 0.08)) * power_nudge
             xb_mult = (1.0 + np.clip(pf_xb * 0.4, -0.08, 0.12)) * (1.0 + np.clip(m_info["XB_Boost"] / 250.0, -0.06, 0.08)) * power_nudge
             s1_mult = (1.0 + np.clip(pf_1b * 0.4, -0.06, 0.08)) * (1.0 + np.clip(m_info["1B_Boost"] / 250.0, -0.05, 0.06)) * contact_nudge
 
-            # Blend directional spray multiplier lightly (25% weight)
             spray_hr_nudge = 0.75 + 0.25 * np.clip(sp_info["Spray_HR"], 0.75, 1.35)
             spray_xb_nudge = 0.75 + 0.25 * np.clip(sp_info["Spray_XB"], 0.75, 1.35)
 
@@ -516,7 +574,6 @@ def process_mlb_files(uploaded_files: list) -> dict:
         batters_df["Adj_HRR"] = adj_hrr_list
         batters_df["Sample_PA"] = pd.to_numeric(batters_df.get("pa", 50), errors="coerce").fillna(50).astype(int)
 
-    # Extract Slate Date if present
     slate_date = None
     if not bpp_games.empty and "GameDate" in bpp_games.columns:
         slate_date = str(bpp_games["GameDate"].iloc[0])[:10]
@@ -549,9 +606,6 @@ def evaluate_mlb_market(
     val = float(line)
     target_int = int(np.floor(val))
 
-    # ---------------------------------------------------------
-    # PITCHER STRIKEOUTS (Ks)
-    # ---------------------------------------------------------
     if "Strikeout" in market or "Ks" in market:
         df = parsed_data.get("pitchers", pd.DataFrame()).copy()
         if df.empty:
@@ -580,18 +634,17 @@ def evaluate_mlb_market(
         df["Pos_Slot"] = df["PitcherHand"].astype(str) + "HP"
         df["Opponent_Info"] = "vs " + df["Clean_Opp"]
         df["Sample"] = df["Sample_BF"]
-        df["Base_Proj"] = df["Strikeouts"].round(2)
+        df["Base_Proj"] = pd.to_numeric(df["Strikeouts"], errors="coerce").round(2)
         df["Matchup_Proj"] = df["Adj_Strikeouts"].round(2)
         df["Model_Over_Prob_%"] = probs
         df["Key_Stat"] = df.apply(
-            lambda r: f"IP: {r.get('Innings', 0):.1f} | xERA: {r.get('xera', 0):.2f}" if pd.notna(r.get("xera")) else f"IP: {r.get('Innings', 0):.1f}",
+            lambda r: f"IP: {float(r.get('Innings', 0)):.1f} | xERA: {float(r.get('xera', 0)):.2f}"
+            if pd.notna(r.get("xera"))
+            else f"IP: {float(r.get('Innings', 0)):.1f}",
             axis=1,
         )
         return df.sort_values(by="Model_Over_Prob_%", ascending=False).reset_index(drop=True)
 
-    # ---------------------------------------------------------
-    # BATTER MARKETS (HRR, Total Bases, Hits, Home Runs)
-    # ---------------------------------------------------------
     df = parsed_data.get("batters", pd.DataFrame()).copy()
     if df.empty:
         return pd.DataFrame()
@@ -608,28 +661,30 @@ def evaluate_mlb_market(
 
     for _, r in df.iterrows():
         if "HRR" in market:
-            b_proj = float(r.get("Hits", 0) + r.get("Runs", 0) + r.get("RBIs", 0))
+            b_proj = float(
+                (pd.to_numeric(r.get("Hits"), errors="coerce") or 0)
+                + (pd.to_numeric(r.get("Runs"), errors="coerce") or 0)
+                + (pd.to_numeric(r.get("RBIs"), errors="coerce") or 0)
+            )
             m_proj = float(r["Adj_HRR"])
-            # Negative Binomial (r=3.5) captures multi-stat correlation when a HR scores H+R+RBI
             nb_r = 3.5
             nb_p = nb_r / (nb_r + max(m_proj, 0.05))
             p_over = (1.0 - nbinom.cdf(target_int, nb_r, nb_p)) * 100.0
 
         elif "Total Bases" in market or "TB" in market:
-            b_proj = float(r.get("Bases", 0))
+            b_proj = float(pd.to_numeric(r.get("Bases"), errors="coerce") or 0)
             m_proj = float(r["Adj_TB"])
             p_over = _prob_tb_over(val, r["Adj_1B"], r["Adj_2B"], r["Adj_3B"], r["Adj_HR"]) * 100.0
 
         elif "Home Run" in market or market == "HR":
-            b_proj = float(r.get("HomeRuns", 0))
+            b_proj = float(pd.to_numeric(r.get("HomeRuns"), errors="coerce") or 0)
             m_proj = float(r["Adj_HR"])
             p_pois = 1.0 - poisson.cdf(target_int, max(m_proj, 0.005))
             bpp_hr_p = float(r.get("HomeRunProbability", p_pois) if pd.notna(r.get("HomeRunProbability")) else p_pois)
-            # Blend 50% BPP simulated HR prob + 50% Statcast/Weather-adjusted Poisson HR prob
             p_over = (0.50 * bpp_hr_p + 0.50 * p_pois) * 100.0
 
         else:  # Hits
-            b_proj = float(r.get("Hits", 0))
+            b_proj = float(pd.to_numeric(r.get("Hits"), errors="coerce") or 0)
             m_proj = float(r["Adj_Hits"])
             p_pois = 1.0 - poisson.cdf(target_int, max(m_proj, 0.02))
             if val <= 0.5 and pd.notna(r.get("HitProbability")):
@@ -643,16 +698,19 @@ def evaluate_mlb_market(
         probs.append(round(float(np.clip(p_over, 0.1, 99.5)), 1))
 
     df["Player"] = df["FullName"]
-    df["Pos_Slot"] = df["BattingPosition"].apply(lambda x: f"#{int(x)} ({df.loc[df['BattingPosition']==x, 'BatterStand'].iloc[0]})" if pd.notna(x) else "-")
+    df["Pos_Slot"] = df.apply(
+        lambda r: f"#{int(r['BattingPosition'])} ({r['BatterStand']})" if pd.notna(r.get("BattingPosition")) else "-",
+        axis=1,
+    )
     df["Opponent_Info"] = df.apply(lambda r: f"vs {r['Opp_Pitcher']} ({r['Opp_Hand']})", axis=1)
     df["Sample"] = df["Sample_PA"]
     df["Base_Proj"] = base_projs
     df["Matchup_Proj"] = matchup_projs
     df["Model_Over_Prob_%"] = probs
     df["Key_Stat"] = df.apply(
-        lambda r: f"PA: {r.get('PlateAppearances', 0):.1f} | Brl: {r.get('brl_percent', 0):.1f}% | xSLG: {r.get('est_slg', 0):.3f}"
+        lambda r: f"PA: {float(r.get('PlateAppearances', 0)):.1f} | Brl: {float(r.get('brl_percent', 0)):.1f}% | xSLG: {float(r.get('est_slg', 0)):.3f}"
         if pd.notna(r.get("brl_percent"))
-        else f"PA: {r.get('PlateAppearances', 0):.1f}",
+        else f"PA: {float(r.get('PlateAppearances', 0)):.1f}",
         axis=1,
     )
 
@@ -669,7 +727,6 @@ def fetch_mlb_schedule_with_fallback(parsed_data: dict, target_date: str | None 
     team_env = parsed_data.get("team_env", {})
     pitchers_df = parsed_data.get("pitchers", pd.DataFrame())
 
-    # Build probable pitcher lookup from uploaded Ballpark Pal files
     bpp_sp_map = {}
     if not pitchers_df.empty:
         for _, p in pitchers_df.iterrows():
@@ -683,8 +740,14 @@ def fetch_mlb_schedule_with_fallback(parsed_data: dict, target_date: str | None 
             data = resp.json()
             for d_entry in data.get("dates", []):
                 for g in d_entry.get("games", []):
-                    away_name = g.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation") or g.get("teams", {}).get("away", {}).get("team", {}).get("name", "")
-                    home_name = g.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation") or g.get("teams", {}).get("home", {}).get("team", {}).get("name", "")
+                    away_name = (
+                        g.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation")
+                        or g.get("teams", {}).get("away", {}).get("team", {}).get("name", "")
+                    )
+                    home_name = (
+                        g.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation")
+                        or g.get("teams", {}).get("home", {}).get("team", {}).get("name", "")
+                    )
                     away_abbr = normalize_team(away_name)
                     home_abbr = normalize_team(home_name)
 
@@ -710,7 +773,6 @@ def fetch_mlb_schedule_with_fallback(parsed_data: dict, target_date: str | None 
     except Exception:
         pass
 
-    # Fallback: Build schedule directly from uploaded Ballpark Pal files
     if not games_out and team_env:
         seen_matchups = set()
         for tm, env in team_env.items():
