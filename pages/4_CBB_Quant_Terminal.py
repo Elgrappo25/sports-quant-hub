@@ -8,7 +8,7 @@ import os
 from scipy.stats import norm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from modules.auto_selector import select_promo_legs
+from modules.auto_selector import select_promo_legs, get_market_threshold_defaults
 
 st.set_page_config(page_title="CBB Quant Terminal", page_icon="🏀", layout="wide")
 
@@ -42,18 +42,26 @@ if "cbb_last_fetch_time" not in st.session_state:
 if "cbb_credits_left" not in st.session_state:
     st.session_state["cbb_credits_left"] = None
 
-# Auto-Selector Engine Persistent Keys
+# Auto-Selector Engine Persistent Keys (Aligned with default Spread market)
 if "cbb_auto_min_prob" not in st.session_state:
-    st.session_state["cbb_auto_min_prob"] = 70.0
+    st.session_state["cbb_auto_min_prob"] = 56.0
 
 if "cbb_auto_max_prob" not in st.session_state:
-    st.session_state["cbb_auto_max_prob"] = 82.0
+    st.session_state["cbb_auto_max_prob"] = 68.0
 
 if "cbb_auto_legs_count" not in st.session_state:
     st.session_state["cbb_auto_legs_count"] = 5
 
 if "cbb_auto_max_game" not in st.session_state:
     st.session_state["cbb_auto_max_game"] = 1
+
+
+def sync_cbb_filters():
+    mkt = st.session_state.get("cbb_market_selector", "Spread (Cover)")
+    p_min, p_max = get_market_threshold_defaults(sport="CBB", market=mkt)
+    st.session_state["cbb_auto_min_prob"] = p_min
+    st.session_state["cbb_auto_max_prob"] = p_max
+
 
 # -------------------------------------------------------------
 # SIDEBAR CONFIGURATION
@@ -94,9 +102,9 @@ st.sidebar.header("⚡ Auto-Selector Engine")
 
 col_p1, col_p2 = st.sidebar.columns(2)
 with col_p1:
-    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="cbb_auto_min_prob")
+    st.number_input("Min Model Prob (%)", 30.0, 95.0, step=1.0, key="cbb_auto_min_prob")
 with col_p2:
-    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="cbb_auto_max_prob")
+    st.number_input("Max Model Prob (%)", 40.0, 99.0, step=1.0, key="cbb_auto_max_prob")
 
 col_l1, col_l2 = st.sidebar.columns(2)
 with col_l1:
@@ -515,7 +523,8 @@ with tab2:
             selected_market = st.selectbox(
                 "Target Main Market Selection",
                 ["Spread (Cover)", "Moneyline (Win)", "Game Total (Over)"],
-                key="cbb_market_selector"
+                key="cbb_market_selector",
+                on_change=sync_cbb_filters
             )
         with c2:
             target_book_filter = st.selectbox(
