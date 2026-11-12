@@ -173,5 +173,38 @@ def get_market_threshold_defaults(sport: str, market: str, line: float = None) -
         if "Assist" in market:
             return (64.0, 76.0) if val <= 0.5 else (32.0, 46.0)
 
+    # ---------------------------------------------------------
+    # 5. MLB PROPS (Ballpark Pal + Baseball Savant)
+    # ---------------------------------------------------------
+    if sport == "MLB":
+        if "HRR" in market:
+            if val <= 0.5:
+                return (70.0, 82.0)
+            elif val <= 1.5:
+                return (54.0, 66.0)
+            else:
+                return (34.0, 48.0)
+        if "Total Bases" in market or "TB" in market:
+            if val <= 0.5:
+                return (68.0, 80.0)
+            elif val <= 1.5:
+                return (48.0, 62.0)
+            else:
+                return (30.0, 44.0)
+        if "Home Run" in market or market == "HR":
+            return (18.0, 32.0)
+        if "Strikeout" in market or "Ks" in market:
+            if val <= 4.5:
+                return (70.0, 82.0)
+            elif val <= 6.5:
+                return (56.0, 68.0)
+            else:
+                return (35.0, 50.0)
+        if "Hit" in market:
+            if val <= 0.5:
+                return (68.0, 80.0)
+            else:
+                return (32.0, 46.0)
+
     # Universal Fallback
     return (70.0, 82.0)
