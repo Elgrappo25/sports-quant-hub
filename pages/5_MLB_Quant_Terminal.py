@@ -51,19 +51,6 @@ MLB_DEFAULT_LINE_IDX = {
 if "mlb_bet_slip" not in st.session_state:
     st.session_state.mlb_bet_slip = []
 
-# Auto-Selector Engine Persistent Keys (Aligned with default HRR > 0.5)
-if "mlb_auto_min_prob" not in st.session_state:
-    st.session_state["mlb_auto_min_prob"] = 70.0
-
-if "mlb_auto_max_prob" not in st.session_state:
-    st.session_state["mlb_auto_max_prob"] = 82.0
-
-if "mlb_auto_legs_count" not in st.session_state:
-    st.session_state["mlb_auto_legs_count"] = 5
-
-if "mlb_auto_max_team" not in st.session_state:
-    st.session_state["mlb_auto_max_team"] = 1
-
 
 def sync_mlb_market_filters():
     mkt = st.session_state.get("mlb_market_selector", "Hits + Runs + RBIs (HRR)")
@@ -110,15 +97,15 @@ st.sidebar.header("⚡ Auto-Selector Engine")
 
 col_p1, col_p2 = st.sidebar.columns(2)
 with col_p1:
-    st.number_input("Min Model Prob (%)", 10.0, 95.0, step=1.0, key="mlb_auto_min_prob")
+    st.number_input("Min Model Prob (%)", min_value=10.0, max_value=95.0, value=70.0, step=1.0, key="mlb_auto_min_prob")
 with col_p2:
-    st.number_input("Max Model Prob (%)", 20.0, 99.0, step=1.0, key="mlb_auto_max_prob")
+    st.number_input("Max Model Prob (%)", min_value=20.0, max_value=99.0, value=82.0, step=1.0, key="mlb_auto_max_prob")
 
 col_l1, col_l2 = st.sidebar.columns(2)
 with col_l1:
-    st.number_input("Target Leg Count", 1, 10, step=1, key="mlb_auto_legs_count")
+    st.number_input("Target Leg Count", min_value=1, max_value=10, value=5, step=1, key="mlb_auto_legs_count")
 with col_l2:
-    st.number_input("Max Per Team", 1, 5, step=1, key="mlb_auto_max_team")
+    st.number_input("Max Per Team", min_value=1, max_value=5, value=1, step=1, key="mlb_auto_max_team")
 
 # ==========================================
 # 3. MAIN NAVIGATION TABS
@@ -436,7 +423,6 @@ with tab2:
                 for leg in existing_slip:
                     leg_is_pit = "Strikeout" in str(leg.get("Market", "")) or "Ks" in str(leg.get("Market", ""))
                     if is_pitcher_mkt != leg_is_pit:
-                        # Block opposing team from existing leg's opponent string if matched
                         for _, m_row in candidate_df.iterrows():
                             if m_row["Player"] == leg.get("Player"):
                                 blocked_teams.add(m_row["_Clean_Opp"])
