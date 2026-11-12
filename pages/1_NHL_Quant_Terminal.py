@@ -4,12 +4,29 @@ import numpy as np
 import requests
 import re
 from scipy.stats import poisson
-from modules.auto_selector import select_promo_legs
+from modules.auto_selector import select_promo_legs, get_market_threshold_defaults
 
 st.set_page_config(page_title="NHL Quant Terminal", page_icon="🏒", layout="wide")
 
 st.title("🏒 NHL Quant Terminal: Production Suite")
 st.markdown("Dynamic Weighting, Multi-Market Prop Accumulators, and Compound Slip Evaluator")
+
+# -------------------------------------------------------------
+# MARKET & MILESTONE CONFIGURATION
+# -------------------------------------------------------------
+NHL_MARKET_THRESHOLD_MAP = {
+    "Shots on Goal (SOG)": [1.5, 2.5, 3.5, 4.5],
+    "Player Points": [0.5, 1.5, 2.5],
+    "Anytime Goal Scorer": [0.5],
+    "Player Assists": [0.5, 1.5]
+}
+
+NHL_DEFAULT_INDICES = {
+    "Shots on Goal (SOG)": 1,  # Default: 2.5
+    "Player Points": 0,        # Default: 0.5
+    "Anytime Goal Scorer": 0,  # Default: 0.5
+    "Player Assists": 0        # Default: 0.5
+}
 
 # -------------------------------------------------------------
 # PERSISTENT SESSION STATE INITIALIZATION
@@ -38,18 +55,40 @@ if "nhl_raw_t_base" not in st.session_state:
 if "nhl_raw_t_curr" not in st.session_state:
     st.session_state["nhl_raw_t_curr"] = None
 
-# Auto-Selector Engine Persistent Keys (Universal 70%-82% Sweet Spot)
+# Auto-Selector Engine Persistent Keys (Aligned with default SOG > 2.5)
 if "nhl_auto_min_prob" not in st.session_state:
-    st.session_state["nhl_auto_min_prob"] = 70.0
+    st.session_state["nhl_auto_min_prob"] = 56.0
 
 if "nhl_auto_max_prob" not in st.session_state:
-    st.session_state["nhl_auto_max_prob"] = 82.0
+    st.session_state["nhl_auto_max_prob"] = 68.0
 
 if "nhl_auto_legs_count" not in st.session_state:
     st.session_state["nhl_auto_legs_count"] = 3
 
 if "nhl_auto_max_team" not in st.session_state:
     st.session_state["nhl_auto_max_team"] = 1
+
+
+def sync_nhl_market_filters():
+    mkt = st.session_state.get("nhl_market_selector", "Shots on Goal (SOG)")
+    opts = NHL_MARKET_THRESHOLD_MAP.get(mkt, [0.5, 1.5, 2.5])
+    def_idx = NHL_DEFAULT_INDICES.get(mkt, 0)
+    line_key = f"nhl_line_selector_{mkt}"
+    line = st.session_state.get(line_key, opts[def_idx])
+    p_min, p_max = get_market_threshold_defaults(sport="NHL", market=mkt, line=line)
+    st.session_state["nhl_auto_min_prob"] = p_min
+    st.session_state["nhl_auto_max_prob"] = p_max
+
+
+def sync_nhl_line_filters():
+    mkt = st.session_state.get("nhl_market_selector", "Shots on Goal (SOG)")
+    opts = NHL_MARKET_THRESHOLD_MAP.get(mkt, [0.5, 1.5, 2.5])
+    def_idx = NHL_DEFAULT_INDICES.get(mkt, 0)
+    line = st.session_state.get(f"nhl_line_selector_{mkt}", opts[def_idx])
+    p_min, p_max = get_market_threshold_defaults(sport="NHL", market=mkt, line=line)
+    st.session_state["nhl_auto_min_prob"] = p_min
+    st.session_state["nhl_auto_max_prob"] = p_max
+
 
 # -------------------------------------------------------------
 # SIDEBAR CONFIGURATION (PERSISTENT VIA KEYS)
@@ -84,16 +123,16 @@ profit_boost = st.sidebar.number_input(
 )
 
 # -------------------------------------------------------------
-# STREAMLINED AUTO-SELECTOR ENGINE (UNIVERSAL DEFAULTS)
+# STREAMLINED AUTO-SELECTOR ENGINE (DYNAMIC DEFAULTS)
 # -------------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.header("⚡ Auto-Selector Engine")
 
 col_p1, col_p2 = st.sidebar.columns(2)
 with col_p1:
-    st.number_input("Min Model Prob (%)", 40.0, 95.0, step=1.0, key="nhl_auto_min_prob")
+    st.number_input("Min Model Prob (%)", 25.0, 95.0, step=1.0, key="nhl_auto_min_prob")
 with col_p2:
-    st.number_input("Max Model Prob (%)", 45.0, 99.0, step=1.0, key="nhl_auto_max_prob")
+    st.number_input("Max Model Prob (%)", 35.0, 99.0, step=1.0, key="nhl_auto_max_prob")
 
 col_l1, col_l2 = st.sidebar.columns(2)
 with col_l1:
@@ -245,29 +284,18 @@ with tab2:
         selected_market = st.selectbox(
             "Select Target Prop Market",
             ["Shots on Goal (SOG)", "Player Points", "Anytime Goal Scorer", "Player Assists"],
-            key="nhl_market_selector"
+            key="nhl_market_selector",
+            on_change=sync_nhl_market_filters
         )
 
-    market_threshold_map = {
-        "Shots on Goal (SOG)": [1.5, 2.5, 3.5, 4.5],
-        "Player Points": [0.5, 1.5, 2.5],
-        "Anytime Goal Scorer": [0.5],
-        "Player Assists": [0.5, 1.5]
-    }
-    default_indices = {
-        "Shots on Goal (SOG)": 1,
-        "Player Points": 0,
-        "Anytime Goal Scorer": 0,
-        "Player Assists": 0
-    }
-
     with col_line:
-        threshold_options = market_threshold_map.get(selected_market, [0.5, 1.5, 2.5])
+        threshold_options = NHL_MARKET_THRESHOLD_MAP.get(selected_market, [0.5, 1.5, 2.5])
         selected_line = st.selectbox(
             "Select Target Threshold Line", 
             threshold_options, 
-            index=default_indices.get(selected_market, 0),
-            key=f"nhl_line_selector_{selected_market}"
+            index=NHL_DEFAULT_INDICES.get(selected_market, 0),
+            key=f"nhl_line_selector_{selected_market}",
+            on_change=sync_nhl_line_filters
         )
 
     slate_date = st.date_input("Target Slate Date", pd.to_datetime("today"), key="nhl_slate_date")
